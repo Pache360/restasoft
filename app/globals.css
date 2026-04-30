@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* ==========================================================
+   CONFIGURACIÓN PARA TICKETS DE 58MM - CORTE AUTOMÁTICO
+   ========================================================== */
+@media print {
+  @page {
+    /* Intentamos forzar que ignore los tamaños predefinidos de Chrome */
+    size: 58mm auto; 
+    margin: 0 !important;
+  }
+
+  html, body {
+    /* Evitamos que el body tenga una altura mínima que estire el papel */
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: 100% !important;
+    overflow: visible !important; /* Cambiado a visible para evitar cortes de texto */
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  #area-impresion, #area-impresion * {
+    visibility: visible !important;
+  }
+
+  #area-impresion {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 58mm !important;
+    /* Forzamos a que el contenedor sea el que mande sobre el largo */
+    height: auto !important;
+    min-height: 0 !important;
+    display: block !important;
+    padding: 2mm;
+    background: white !important;
+    color: black !important;
+    /* Propiedad para intentar que el driver detecte el final del bloque */
+    page-break-after: avoid;
+  }
+
+  /* AJUSTE PARA LOGO Y GRÁFICOS (Añadido para nitidez en térmica) */
+  #area-impresion img {
+    max-width: 100%;
+    display: block;
+    margin: 0 auto;
+    /* Forzamos contraste alto para que el logo salga bien definido */
+    filter: grayscale(100%) contrast(200%);
+  }
+
+  /* Propiedad estándar para compatibilidad de colores (corrige error previo) */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
