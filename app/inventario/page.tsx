@@ -9,7 +9,6 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 
-// INTERFACES (Intactas)
 interface Categoria { id: string; nombre: string; }
 interface Insumo {
   id: string;
@@ -19,6 +18,7 @@ interface Insumo {
   stock_minimo: number;
   categoria_id: string;
   costo_unitario: number; 
+  es_preparado: boolean; 
   categorias_insumos?: { nombre: string };
 }
 
@@ -99,11 +99,14 @@ export default function InventarioPage() {
         const descuento = item.cantidad_proporcional * cantidadAProducir;
         const { data: base } = await supabase.from('insumos').select('cantidad_actual').eq('id', item.insumo_base_id).single();
         if (base) {
-          await supabase.from('insumos').update({ cantidad_actual: base.cantidad_actual - descuento }).eq('id', item.insumo_base_id);
+          const nuevaCantBase = Number((base.cantidad_actual - descuento).toFixed(3));
+          await supabase.from('insumos').update({ cantidad_actual: nuevaCantBase }).eq('id', item.insumo_base_id);
         }
       }
 
-      await supabase.from('insumos').update({ cantidad_actual: insumoSeleccionado.cantidad_actual + cantidadAProducir }).eq('id', insumoSeleccionado.id);
+      const nuevaCantPrep = Number((insumoSeleccionado.cantidad_actual + cantidadAProducir).toFixed(3));
+      await supabase.from('insumos').update({ cantidad_actual: nuevaCantPrep }).eq('id', insumoSeleccionado.id);
+      
       setModalProduccion(false);
       setCantidadAProducir(0);
       cargarDatos();
@@ -111,23 +114,20 @@ export default function InventarioPage() {
     } catch (error) { console.error(error); }
   };
 
-  // --- LÓGICA DE GUARDADO ACTUALIZADA (SUMA EN LUGAR DE SUSTITUIR) ---
   const guardarInsumo = async () => {
-    if (!form.nombre || !form.categoria_id) return alert("Nombre y Categoría son obligatorios");
+    if (!form.nombre) return alert("El nombre es obligatorio");
     
-    // Buscamos el stock actual si estamos editando
     const insumoExistente = insumos.find(i => i.id === editandoId);
     const stockPrevio = editandoId ? (insumoExistente?.cantidad_actual || 0) : 0;
     
-    // Sumamos la cantidad nueva a la que ya existía
-    const stockFinal = stockPrevio + form.cantidad_actual;
+    const stockFinal = Number((stockPrevio + form.cantidad_actual).toFixed(3));
 
     const payload = {
       nombre: form.nombre,
-      cantidad_actual: stockFinal, // Aquí se aplica la suma
+      cantidad_actual: stockFinal,
       unidad_medida: form.unidad_medida,
       stock_minimo: form.stock_minimo,
-      categoria_id: form.categoria_id,
+      categoria_id: form.categoria_id || null, 
       costo_unitario: form.costo_unitario
     };
 
@@ -150,6 +150,24 @@ export default function InventarioPage() {
     } catch (error) { console.error(error); }
   };
 
+  // --- NUEVA FUNCIÓN: ELIMINAR INSUMO ---
+  const eliminarInsumo = async (id: string, nombre: string) => {
+    if (confirm(`¿Estás seguro de que deseas eliminar "${nombre}" de forma permanente?`)) {
+      try {
+        const { error } = await supabase.from('insumos').delete().eq('id', id);
+        if (error) {
+          // Si da error, casi seguro es porque está siendo usado en el recetario
+          alert(`No se pudo eliminar "${nombre}". Es posible que esté siendo utilizado como ingrediente en alguna receta.`);
+          console.error(error);
+          return;
+        }
+        cargarDatos();
+      } catch (error) {
+        console.error(error);
+      }
+    }
+  };
+
   const agregarCategoria = async () => {
     if (!nuevaCatNombre) return;
     await supabase.from('categorias_insumos').insert([{ nombre: nuevaCatNombre }]);
@@ -166,8 +184,9 @@ export default function InventarioPage() {
 
   const registrarMerma = async () => {
     if (!insumoSeleccionado || cantidadMerma <= 0) return;
-    const nuevaCantidad = insumoSeleccionado.cantidad_actual - cantidadMerma;
-    const costoPerdido = insumoSeleccionado.costo_unitario * cantidadMerma;
+    const nuevaCantidad = Number((insumoSeleccionado.cantidad_actual - cantidadMerma).toFixed(3));
+    const costoPerdido = Number((insumoSeleccionado.costo_unitario * cantidadMerma).toFixed(2));
+    
     try {
       await supabase.from('insumos').update({ cantidad_actual: nuevaCantidad }).eq('id', insumoSeleccionado.id);
       if (costoPerdido > 0) {
@@ -229,35 +248,39 @@ export default function InventarioPage() {
               </div>
               
               <div className="flex items-end gap-2 mb-6">
-                <span className={`text-3xl font-black italic ${insumo.cantidad_actual <= insumo.stock_minimo ? 'text-red-600' : 'text-indigo-950'}`}>{insumo.cantidad_actual}</span>
+                <span className={`text-3xl font-black italic ${insumo.cantidad_actual <= insumo.stock_minimo ? 'text-red-600' : 'text-indigo-950'}`}>
+                  {Number(insumo.cantidad_actual.toFixed(3))}
+                </span>
                 <span className="text-slate-400 font-bold uppercase text-[10px] mb-2">{insumo.unidad_medida}</span>
               </div>
 
               <div className="flex gap-2">
-                {insumo.categorias_insumos?.nombre.toLowerCase() === 'preparados' && (
-                  <button onClick={() => { setInsumoSeleccionado(insumo); setModalProduccion(true); }} className="p-3 bg-indigo-950 text-white rounded-2xl hover:bg-indigo-800 transition-all shadow-md"><Hammer size={18} /></button>
+                {insumo.es_preparado && (
+                  <button onClick={() => { setInsumoSeleccionado(insumo); setModalProduccion(true); }} className="p-3 bg-indigo-950 text-white rounded-2xl hover:bg-indigo-800 transition-all shadow-md" title="Producir Lote"><Hammer size={18} /></button>
                 )}
                 <button onClick={() => { setInsumoSeleccionado(insumo); setModalMerma(true); }} className="grow flex items-center justify-center gap-2 bg-red-100 text-red-600 font-black py-3 rounded-2xl text-[10px] uppercase hover:bg-red-200 transition-all"><MinusCircle size={16} /> Merma</button>
                 <button onClick={() => { 
                     setEditandoId(insumo.id); 
                     setForm({
                       nombre: insumo.nombre,
-                      cantidad_actual: 0, // Al editar, empezamos en 0 para sumar lo nuevo
+                      cantidad_actual: 0, 
                       unidad_medida: insumo.unidad_medida,
                       stock_minimo: insumo.stock_minimo,
-                      categoria_id: insumo.categoria_id,
+                      categoria_id: insumo.categoria_id || '',
                       costo_total: 0, 
                       costo_unitario: insumo.costo_unitario || 0
                     }); 
                     setModalAbierto(true); 
-                }} className="p-3 bg-slate-50 border border-slate-100 text-slate-400 hover:text-blue-500 rounded-2xl transition-all"><Edit2 size={18} /></button>
+                }} className="p-3 bg-slate-50 border border-slate-100 text-slate-400 hover:text-blue-500 rounded-2xl transition-all" title="Editar"><Edit2 size={18} /></button>
+                
+                {/* --- BOTÓN DE ELIMINAR --- */}
+                <button onClick={() => eliminarInsumo(insumo.id, insumo.nombre)} className="p-3 bg-red-50 border border-red-100 text-red-400 hover:text-red-600 hover:bg-red-100 rounded-2xl transition-all" title="Eliminar Insumo"><Trash2 size={18} /></button>
               </div>
             </div>
           ))}
         </div>
       </main>
 
-      {/* MODAL DE PRODUCCIÓN (Intacto) */}
       {modalProduccion && (
         <div className="fixed inset-0 bg-indigo-950/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-[48px] p-10 shadow-2xl text-center">
@@ -265,7 +288,7 @@ export default function InventarioPage() {
             <h2 className="text-2xl font-black text-indigo-950 uppercase italic">Preparar Lote</h2>
             <div className="mb-8 mt-6">
               <label className="text-[10px] font-black text-slate-400 uppercase block mb-2">Cantidad preparada ({insumoSeleccionado?.unidad_medida})</label>
-              <input type="number" className="w-full text-4xl font-black text-center bg-slate-50 p-4 rounded-3xl outline-none" value={cantidadAProducir} onChange={e => setCantidadAProducir(Number(e.target.value))} autoFocus />
+              <input type="number" className="w-full text-4xl font-black text-center bg-slate-50 p-4 rounded-3xl outline-none" value={cantidadAProducir === 0 ? '' : cantidadAProducir} onChange={e => setCantidadAProducir(Number(e.target.value))} autoFocus />
             </div>
             <div className="flex gap-4">
               <button onClick={() => setModalProduccion(false)} className="grow bg-slate-100 text-slate-400 font-black py-4 rounded-2xl text-[10px] uppercase">Cancelar</button>
@@ -275,7 +298,6 @@ export default function InventarioPage() {
         </div>
       )}
 
-      {/* MODAL NUEVO/EDITAR (Intacto con funcionalidad de suma) */}
       {modalAbierto && (
         <div className="fixed inset-0 bg-indigo-950/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-md rounded-[48px] p-10 shadow-2xl overflow-y-auto max-h-[90vh]">
@@ -287,14 +309,14 @@ export default function InventarioPage() {
                 {categorias.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
               </select>
               <div className="grid grid-cols-2 gap-4">
-                <input type="number" placeholder="Cantidad a sumar..." className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none" value={form.cantidad_actual} onChange={e => actualizarPrecioUnitario(Number(e.target.value), form.costo_total)} />
+                <input type="number" placeholder="Cantidad a sumar..." className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none" value={form.cantidad_actual === 0 ? '' : form.cantidad_actual} onChange={e => actualizarPrecioUnitario(Number(e.target.value), form.costo_total)} />
                 <select className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold" value={form.unidad_medida} onChange={e => setForm({...form, unidad_medida: e.target.value})}>
                   <option value="kg">Kg</option><option value="lts">Lts</option><option value="pz">Piezas</option><option value="gr">Gramos</option>
                 </select>
               </div>
-              <input type="number" placeholder="Costo de esta compra ($)" className="w-full bg-emerald-50 border-2 border-emerald-100 rounded-2xl p-4 font-bold outline-none" value={form.costo_total} onChange={e => actualizarPrecioUnitario(form.cantidad_actual, Number(e.target.value))} />
+              <input type="number" placeholder="Costo de esta compra ($)" className="w-full bg-emerald-50 border-2 border-emerald-100 rounded-2xl p-4 font-bold outline-none" value={form.costo_total === 0 ? '' : form.costo_total} onChange={e => actualizarPrecioUnitario(form.cantidad_actual, Number(e.target.value))} />
               <div className="p-4 bg-slate-100 rounded-2xl flex justify-between items-center"><span className="text-[10px] font-black text-slate-400 uppercase">Costo Unitario:</span><span className="text-xl font-black text-indigo-950">${form.costo_unitario}</span></div>
-              <input type="number" placeholder="Stock Mínimo" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none" value={form.stock_minimo} onChange={e => setForm({...form, stock_minimo: Number(e.target.value)})} />
+              <input type="number" placeholder="Stock Mínimo" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none" value={form.stock_minimo === 0 ? '' : form.stock_minimo} onChange={e => setForm({...form, stock_minimo: Number(e.target.value)})} />
             </div>
             <div className="flex gap-4 mt-10">
               <button onClick={cerrarModal} className="grow bg-slate-100 text-slate-400 font-black py-4 rounded-2xl uppercase text-[10px]">Cancelar</button>
@@ -304,7 +326,6 @@ export default function InventarioPage() {
         </div>
       )}
 
-      {/* MODAL CATEGORÍAS (Intacto) */}
       {modalCategorias && (
         <div className="fixed inset-0 bg-indigo-950/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-md rounded-[48px] p-10 shadow-2xl">
@@ -326,13 +347,12 @@ export default function InventarioPage() {
         </div>
       )}
 
-      {/* MODAL MERMA (Intacto) */}
       {modalMerma && (
         <div className="fixed inset-0 bg-red-900/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-[48px] p-10 shadow-2xl text-center">
             <h2 className="text-xl font-black text-indigo-950 uppercase mb-2">Merma</h2>
             <p className="text-slate-400 text-xs font-bold uppercase mb-8">{insumoSeleccionado?.nombre}</p>
-            <input type="number" className="w-full text-4xl font-black text-center border-b-4 border-red-500 p-6 outline-none mb-8" value={cantidadMerma} onChange={e => setCantidadMerma(Number(e.target.value))} autoFocus />
+            <input type="number" className="w-full text-4xl font-black text-center border-b-4 border-red-500 p-6 outline-none mb-8" value={cantidadMerma === 0 ? '' : cantidadMerma} onChange={e => setCantidadMerma(Number(e.target.value))} autoFocus />
             <div className="flex gap-4">
               <button onClick={() => setModalMerma(false)} className="grow bg-slate-100 text-slate-400 font-black py-4 rounded-2xl text-[10px]">CANCELAR</button>
               <button onClick={registrarMerma} className="grow bg-red-600 text-white font-black py-4 rounded-2xl text-[10px]">DESCONTAR</button>

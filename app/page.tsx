@@ -45,7 +45,6 @@ type TipoOrden = 'comedor' | 'llevar' | 'domicilio';
 interface DetallePedido { id: string; producto_id: string; cantidad: number; notas: string; subtotal: number; estado?: string; }
 interface CuentaAbierta { id: string; total: number; tipo_servicio: string; fecha: string; pedido_items: DetallePedido[]; mesero: string; }
 
-// --- CONSTANTES FUERA DEL COMPONENTE PARA EVITAR RE-RENDERS ---
 const permisosBase: MatrizPermisos = {
   mesero: { comandas: true, caja: false, cocina: false, inventario: false, reportes: false, admin: false },
   cajero: { comandas: true, caja: true, cocina: false, inventario: false, reportes: false, admin: false },
@@ -134,6 +133,29 @@ export default function RestaSoftPOS() {
 
     inicializarPOS();
   }, [router]);
+
+  // --- NUEVO: SOPORTE PARA TECLADO FÍSICO EN EL LOGIN ---
+  useEffect(() => {
+    if (usuarioActivo) return; // Solo escuchar si estamos en la pantalla de login
+
+    const manejarTeclado = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      if (/^[0-9]$/.test(e.key)) {
+        setPinLogin(prev => prev.length < 4 ? prev + e.key : prev);
+      } else if (e.key === 'Backspace') {
+        setPinLogin(prev => prev.slice(0, -1));
+      } else if (e.key === 'Enter') {
+        // Simulamos un clic en el botón de Enter para usar el PIN actual
+        document.getElementById('btn-login-principal')?.click();
+      } else if (e.key.toLowerCase() === 'c' || e.key === 'Escape') {
+        setPinLogin("");
+      }
+    };
+
+    window.addEventListener('keydown', manejarTeclado);
+    return () => window.removeEventListener('keydown', manejarTeclado);
+  }, [usuarioActivo]);
 
   const handleLogin = async () => {
     if (pinLogin.length !== 4) return;
@@ -287,10 +309,10 @@ export default function RestaSoftPOS() {
   if (!usuarioActivo) {
     return (
       <div className="h-screen flex flex-col items-center justify-center bg-indigo-950 text-white font-sans">
-        <h1 className="text-5xl font-black italic tracking-tighter mb-8">RESTA<span className="text-orange-500 font-light">SOFT</span></h1>
+        <h1 className="text-5xl font-black italic tracking-tighter mb-8">RESTA<span className="text-orange-500 font-light text-2xl">SOFT</span></h1>
         <div className="bg-white p-10 rounded-[48px] text-slate-900 shadow-2xl w-full max-w-sm text-center">
           <h2 className="text-xl font-bold uppercase mb-2 text-indigo-950">Acceso al Sistema</h2>
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-8">Ingresa tu PIN</p>
+          <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-8">Ingresa tu PIN con el teclado</p>
           
           <div className="text-5xl tracking-[0.5em] mb-8 font-black text-indigo-950 h-14 bg-slate-50 rounded-2xl flex items-center justify-center border-2 border-slate-100">
             {pinLogin.padEnd(4, '•')}
@@ -304,7 +326,7 @@ export default function RestaSoftPOS() {
             ))}
             <button onClick={() => setPinLogin("")} className="bg-red-50 border-2 border-red-100 text-red-500 p-5 rounded-2xl font-black hover:bg-red-100 transition-all active:scale-95">C</button>
             <button onClick={() => { if(pinLogin.length < 4) setPinLogin(pinLogin + '0') }} className="bg-slate-50 border-2 border-slate-100 p-5 rounded-2xl text-2xl font-black text-indigo-950 hover:bg-orange-50 hover:border-orange-500 transition-all active:scale-95">0</button>
-            <button onClick={handleLogin} className="bg-emerald-500 text-white p-5 rounded-2xl font-black hover:bg-emerald-400 shadow-lg shadow-emerald-500/30 flex items-center justify-center transition-all active:scale-95"><Check size={32}/></button>
+            <button id="btn-login-principal" onClick={handleLogin} className="bg-emerald-500 text-white p-5 rounded-2xl font-black hover:bg-emerald-400 shadow-lg shadow-emerald-500/30 flex items-center justify-center transition-all active:scale-95"><Check size={32}/></button>
           </div>
         </div>
       </div>

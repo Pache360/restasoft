@@ -8,10 +8,10 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 
-// DEFINICIÓN DE INTERFACES (Intactas)
 interface ModificadorBase { id: string; nombre: string; }
 interface Producto { id: string; nombre: string; modificadores?: ModificadorBase[]; }
-interface Insumo { id: string; nombre: string; unidad_medida: string; categoria_id?: string; }
+// Agregamos es_preparado a la interfaz
+interface Insumo { id: string; nombre: string; unidad_medida: string; categoria_id?: string; es_preparado?: boolean; }
 interface RecetaItem { 
   id: string; 
   insumo_id: string; 
@@ -33,7 +33,7 @@ export default function RecetasPage() {
   
   const [modalNuevo, setModalNuevo] = useState(false);
   const [nombreNuevo, setNombreNuevo] = useState('');
-  const [precioNuevo, setPrecioNuevo] = useState<number>(0); // --- NUEVO ESTADO PARA PRECIO ---
+  const [precioNuevo, setPrecioNuevo] = useState<number>(0); 
   
   const [modalAsignar, setModalAsignar] = useState(false);
   const [productosVincular, setProductosVincular] = useState<string[]>([]);
@@ -44,7 +44,8 @@ export default function RecetasPage() {
 
   const cargarDatosIniciales = useCallback(async () => {
     const { data: p } = await supabase.from('productos').select('id, nombre, modificadores').order('nombre');
-    const { data: i } = await supabase.from('insumos').select('id, nombre, unidad_medida, categoria_id').order('nombre');
+    // Traemos también la columna es_preparado
+    const { data: i } = await supabase.from('insumos').select('id, nombre, unidad_medida, categoria_id, es_preparado').order('nombre');
     const { data: c } = await supabase.from('categorias_insumos').select('id, nombre');
     
     const idCatPrep = c?.find(cat => cat.nombre.toLowerCase() === 'preparados')?.id;
@@ -65,7 +66,6 @@ export default function RecetasPage() {
     setCargando(false);
   }, []);
 
-  // --- FIX: useEffect corregido para evitar Cascading Renders ---
   useEffect(() => {
     let montado = true;
     if (montado) {
@@ -74,14 +74,13 @@ export default function RecetasPage() {
     return () => { montado = false; };
   }, [cargarDatosIniciales]);
 
-  // --- LÓGICA DE CREACIÓN CORREGIDA (INCLUYE PRECIO) ---
+  // LÓGICA DE CREACIÓN: AHORA SÍ MANDA EL ES_PREPARADO A SUPABASE
   const crearElementoPrincipal = async () => {
     if (!nombreNuevo) return;
     
     const tabla = modo === 'productos' ? 'productos' : modo === 'modificadores' ? 'modificadores' : 'insumos';
     
-    // El payload ahora incluye el precio para evitar el error de "not-null constraint"
-    const payload: Record<string, string | number | null> = { 
+    const payload: Record<string, string | number | null | boolean> = { 
       nombre: nombreNuevo 
     };
 
@@ -90,7 +89,8 @@ export default function RecetasPage() {
     }
     
     if (modo === 'preparados') {
-      payload.categoria_id = idCategoriaPreparados;
+      payload.es_preparado = true; // <--- LA MAGIA ESTÁ AQUÍ
+      payload.categoria_id = idCategoriaPreparados || null; 
     }
 
     const { error } = await supabase.from(tabla).insert([payload]);
@@ -205,7 +205,8 @@ export default function RecetasPage() {
             <button onClick={() => setModalNuevo(true)} className="bg-orange-600 text-white p-1 rounded-lg hover:scale-110 transition-all"><Plus size={16}/></button>
           </div>
           <div className="bg-white rounded-4xl border-2 border-slate-100 p-4 shadow-sm max-h-150 overflow-y-auto">
-            {(modo === 'productos' ? productos : modo === 'modificadores' ? modificadores : insumos.filter(ins => ins.categoria_id === idCategoriaPreparados)).map(item => (
+            {/* FITRO ACTUALIZADO: Si estamos en modo preparados, muestra los que tienen es_preparado = true */}
+            {(modo === 'productos' ? productos : modo === 'modificadores' ? modificadores : insumos.filter(ins => ins.es_preparado)).map(item => (
               <div key={item.id} className="relative group">
                 <button onClick={() => cargarReceta(item.id)} className={`w-full text-left p-4 pr-12 rounded-2xl mb-2 font-bold transition-all ${seleccionadoId === item.id ? 'bg-orange-500 text-white shadow-lg' : 'hover:bg-slate-50 text-indigo-950'}`}>{item.nombre}</button>
                 <button onClick={(e) => eliminarEntradaPrincipal(item.id, e)} className="absolute right-3 top-4 text-slate-200 hover:text-red-500 transition-all"><Trash2 size={16} /></button>
@@ -257,10 +258,11 @@ export default function RecetasPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <select className="bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950" value={nuevoIngrediente.insumo_id} onChange={e => setNuevoIngrediente({...nuevoIngrediente, insumo_id: e.target.value})}>
                     <option value="">Seleccionar Insumo...</option>
+                    {/* Filtra para no poder agregarse a sí mismo como ingrediente */}
                     {insumos.filter(i => i.id !== seleccionadoId).map(i => <option key={i.id} value={i.id}>{i.nombre} ({i.unidad_medida})</option>)}
                   </select>
                   <div className="flex gap-2">
-                    <input type="number" step="0.001" placeholder="Cant." className="grow bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950" value={nuevoIngrediente.cantidad} onChange={e => setNuevoIngrediente({...nuevoIngrediente, cantidad: Number(e.target.value)})} />
+                    <input type="number" step="0.001" placeholder="Cant." className="grow bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950" value={nuevoIngrediente.cantidad === 0 ? '' : nuevoIngrediente.cantidad} onChange={e => setNuevoIngrediente({...nuevoIngrediente, cantidad: Number(e.target.value)})} />
                     <button onClick={agregarIngrediente} className="bg-orange-600 text-white px-6 rounded-2xl shadow-lg hover:bg-orange-500 transition-all"><Plus size={24}/></button>
                   </div>
                 </div>
@@ -275,7 +277,6 @@ export default function RecetasPage() {
         </div>
       </main>
 
-      {/* --- MODAL NUEVO ELEMENTO (CORREGIDO CON PRECIO) --- */}
       {modalNuevo && (
         <div className="fixed inset-0 bg-indigo-950/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-[48px] p-10 shadow-2xl text-center">
@@ -284,16 +285,15 @@ export default function RecetasPage() {
             <div className="space-y-4 mb-8">
               <div>
                 <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block text-left">Nombre:</label>
-                <input placeholder="Ej. Burger Especial..." className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950" value={nombreNuevo} onChange={e => setNombreNuevo(e.target.value)} autoFocus />
+                <input placeholder="Ej. Masa especial..." className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950" value={nombreNuevo} onChange={e => setNombreNuevo(e.target.value)} autoFocus />
               </div>
 
-              {/* Solo mostramos el precio si es producto o modificador */}
               {(modo === 'productos' || modo === 'modificadores') && (
                 <div>
                   <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block text-left">Precio de Venta ($):</label>
                   <div className="relative">
                     <DollarSign size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input type="number" placeholder="0.00" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 pl-10 font-bold outline-none focus:border-orange-500 text-indigo-950" value={precioNuevo} onChange={e => setPrecioNuevo(Number(e.target.value))} />
+                    <input type="number" placeholder="0.00" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 pl-10 font-bold outline-none focus:border-orange-500 text-indigo-950" value={precioNuevo === 0 ? '' : precioNuevo} onChange={e => setPrecioNuevo(Number(e.target.value))} />
                   </div>
                 </div>
               )}
@@ -307,7 +307,6 @@ export default function RecetasPage() {
         </div>
       )}
 
-      {/* MODAL ASIGNAR (Vínculos) */}
       {modalAsignar && (
         <div className="fixed inset-0 bg-indigo-950/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-md rounded-[48px] p-10 shadow-2xl">
