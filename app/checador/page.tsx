@@ -67,6 +67,36 @@ export default function ChecadorKiosko() {
     cargarModelosIA();
   }, []);
 
+  // --- SOLUCIÓN DE CÁMARA PARA MÓVILES Y TABLETS ---
+  useEffect(() => {
+    let streamActivo: MediaStream | null = null;
+
+    if (tipoRegistro) {
+      // Le damos 200ms a React para que pinte la pantalla dividida antes de buscar la cámara
+      setTimeout(async () => {
+        const nodoVideo = videoRef.current;
+        if (nodoVideo) {
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+              video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } 
+            });
+            nodoVideo.srcObject = stream;
+            streamActivo = stream;
+          } catch (error) {
+            console.error("Error al acceder a la cámara", error);
+          }
+        }
+      }, 200);
+    }
+
+    return () => {
+      if (streamActivo) {
+        streamActivo.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [tipoRegistro]); // <-- Dependemos de 'tipoRegistro' porque la cámara solo aparece al elegir entrada/salida
+  // --------------------------------------------------
+
   const capturarFotoBase64 = useCallback(() => {
     if (videoRef.current && canvasRef.current) {
       const context = canvasRef.current.getContext('2d');
@@ -210,29 +240,6 @@ export default function ChecadorKiosko() {
     };
   }, [tipoRegistro, procesarRegistro]);
 
-  // Cámara
-  useEffect(() => {
-    const currentVideo = videoRef.current; 
-    async function setupCamera() {
-      if (currentVideo) {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-          currentVideo.srcObject = stream;
-        } catch (error) {
-          console.error("Error al acceder a la cámara", error);
-        }
-      }
-    }
-    setupCamera();
-    
-    return () => {
-      if (currentVideo && currentVideo.srcObject) {
-        const stream = currentVideo.srcObject as MediaStream;
-        stream.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, []);
-
   return (
     <div className="min-h-screen bg-indigo-950 text-white font-sans flex flex-col items-center justify-center p-6">
       <canvas ref={canvasRef} className="hidden" />
@@ -280,7 +287,8 @@ export default function ChecadorKiosko() {
           
           <div className={`w-full md:w-1/2 bg-black rounded-[48px] overflow-hidden border-4 shadow-2xl relative min-h-100 transition-all ${validandoRostro ? 'border-emerald-500 ring-4 ring-emerald-500/50' : 'border-white/10'}`}>
              <div id="reader" className="w-full"></div>
-             <video ref={videoRef} autoPlay muted className={`w-full h-full object-cover absolute inset-0 -z-10 transition-all ${validandoRostro ? 'grayscale-0' : 'grayscale opacity-50'}`} />
+             {/* AÑADIDO PLAYSINLINE PARA MOVILES */}
+             <video ref={videoRef} autoPlay muted playsInline className={`w-full h-full object-cover absolute inset-0 -z-10 transition-all ${validandoRostro ? 'grayscale-0' : 'grayscale opacity-50'}`} />
              
              {validandoRostro ? (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-indigo-950/80 backdrop-blur-sm z-10">
