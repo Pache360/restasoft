@@ -20,7 +20,7 @@ export default function ChecadorKiosko() {
   const [isClient, setIsClient] = useState(false);
   const [hora, setHora] = useState(new Date());
   const [pin, setPin] = useState("");
-  const [tipoRegistro, setTipoRegistro] = useState<'entrada' | 'salida'>('entrada'); // Por defecto en entrada
+  const [tipoRegistro, setTipoRegistro] = useState<'entrada' | 'salida'>('entrada');
   const [modoBiometrico, setModoBiometrico] = useState<'facial' | 'huella'>('facial');
   
   const [cargando, setCargando] = useState(false);
@@ -49,12 +49,12 @@ export default function ChecadorKiosko() {
           faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
         ]);
         setIaCargada(true);
-      } catch (error) { console.error("Error cargando IA Facial", error); }
+      } catch (error) { console.error("Error cargando IA", error); }
     };
     cargarModelosIA();
   }, []);
 
-  // --- CÁMARA SIEMPRE ACTIVA (Se carga al entrar a la página) ---
+  // CÁMARA
   useEffect(() => {
     let streamActivo: MediaStream | null = null;
 
@@ -67,13 +67,12 @@ export default function ChecadorKiosko() {
           videoRef.current.srcObject = stream;
           streamActivo = stream;
         } catch (error) {
-          console.error("Error al acceder a la cámara:", error);
+          console.error("Error cámara:", error);
           setMensaje({ texto: 'Asegúrate de dar permisos de cámara al navegador', tipo: 'error' });
         }
       }
     };
 
-    // Pequeño retraso para asegurar que el HTML del <video> ya está renderizado
     setTimeout(iniciarCamara, 300);
 
     return () => {
@@ -99,18 +98,16 @@ export default function ChecadorKiosko() {
     setMensaje({ texto: '', tipo: '' });
 
     try {
-      // 1. Buscar Usuario
       const { data, error: userError } = await supabase.from('usuarios').select('*, turnos(*)').eq('pin', pin).single();
       const usuario = data as unknown as Usuario;
       
       if (userError || !usuario) throw new Error("Usuario no encontrado o PIN incorrecto");
 
-      // 2. VALIDACIÓN BIOMÉTRICA
       if (modoBiometrico === 'facial') {
         if (!usuario.rostro_descriptor || usuario.rostro_descriptor.length === 0) {
           throw new Error("No tienes rostro registrado en el sistema.");
         }
-        if (!iaCargada) throw new Error("La Inteligencia Artificial aún está cargando...");
+        if (!iaCargada) throw new Error("La IA aún está cargando...");
         if (!videoRef.current) throw new Error("Cámara no activa.");
 
         const deteccion = await faceapi.detectSingleFace(videoRef.current).withFaceLandmarks().withFaceDescriptor();
@@ -121,14 +118,10 @@ export default function ChecadorKiosko() {
         const distancia = faceapi.euclideanDistance(deteccion.descriptor, descriptorRegistrado);
         
         if (distancia > 0.50) throw new Error("ALERTA: El rostro no coincide con el PIN.");
-      } else {
-        // Aquí iría la lógica del lector USB de Huella si el hardware lo permite
-        // Por ahora lo simulamos como "Aprobado" si meten bien el PIN en modo Huella
       }
 
       const foto = modoBiometrico === 'facial' ? capturarFotoBase64() : null;
 
-      // 3. Validar Puntualidad (Retardos)
       let estatus = 'puntual';
       if (tipoRegistro === 'entrada' && usuario.turnos) {
         const [h, m] = usuario.turnos.hora_entrada.split(':');
@@ -139,7 +132,6 @@ export default function ChecadorKiosko() {
         if (new Date() > limiteTolerancia) estatus = 'retardo';
       }
 
-      // 4. Guardar
       const { error: asistError } = await supabase.from('asistencias').insert([{
         usuario_id: usuario.id,
         tipo_registro: tipoRegistro,
@@ -165,7 +157,6 @@ export default function ChecadorKiosko() {
     }
   }, [pin, tipoRegistro, modoBiometrico, capturarFotoBase64, iaCargada]);
 
-  // Teclado Físico
   useEffect(() => {
     const manejarTeclado = (e: KeyboardEvent) => {
       if (cargando) return; 
@@ -185,73 +176,74 @@ export default function ChecadorKiosko() {
   }, [pin, procesarRegistro, cargando]);
 
   return (
-    <div className="h-screen bg-indigo-950 text-white font-sans flex flex-col overflow-hidden">
+    // CAMBIO 1: min-h-screen y overflow-y-auto en móviles, h-screen overflow-hidden en md: (tablets/pc)
+    <div className="min-h-screen md:h-screen bg-indigo-950 text-white font-sans flex flex-col overflow-y-auto md:overflow-hidden pb-10 md:pb-0">
       <canvas ref={canvasRef} className="hidden" />
       
       {/* HEADER SUPERIOR */}
-      <header className="p-6 flex justify-between items-center z-10 bg-indigo-950 shadow-md">
-        <div className="flex items-center gap-4">
-          <Link href="/" className="p-3 bg-white/10 rounded-full hover:bg-white/20 transition-all">
-            <ArrowLeft size={24} />
+      <header className="p-4 md:p-6 flex flex-col md:flex-row justify-between items-center z-10 bg-indigo-950 shadow-md gap-4 md:gap-0">
+        <div className="flex items-center gap-3 md:gap-4 w-full md:w-auto justify-between md:justify-start">
+          <Link href="/" className="p-2 md:p-3 bg-white/10 rounded-full hover:bg-white/20 transition-all shrink-0">
+            <ArrowLeft size={20} className="md:w-6 md:h-6" />
           </Link>
-          <div>
-            <h1 className="text-2xl font-black italic tracking-tighter">KIOSCO <span className="text-orange-500 font-light">RESTA SOFT</span></h1>
-            <p className="text-orange-500 font-bold uppercase tracking-[0.2em] text-[10px]">
-              {isClient ? hora.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' }) : 'Cargando fecha...'}
+          <div className="text-right md:text-left">
+            <h1 className="text-xl md:text-2xl font-black italic tracking-tighter">KIOSCO <span className="text-orange-500 font-light">RESTA SOFT</span></h1>
+            <p className="text-orange-500 font-bold uppercase tracking-widest md:tracking-[0.2em] text-[8px] md:text-[10px]">
+              {isClient ? hora.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' }) : 'Cargando...'}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-6">
-          <h2 className="text-4xl font-black italic tracking-tighter">
+        <div className="flex items-center justify-between w-full md:w-auto gap-4 md:gap-6">
+          <h2 className="text-2xl md:text-4xl font-black italic tracking-tighter">
             {isClient ? hora.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--'}
           </h2>
           
           {/* SELECTOR DE BIOMETRÍA */}
-          <div className="bg-black/30 p-1 rounded-2xl flex gap-1 border border-white/10">
-            <button onClick={() => setModoBiometrico('facial')} className={`px-4 py-3 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-2 ${modoBiometrico === 'facial' ? 'bg-orange-600 shadow-md' : 'text-slate-400 hover:text-white'}`}>
-              <ScanFace size={16} /> Face ID
+          <div className="bg-black/30 p-1 rounded-xl md:rounded-2xl flex gap-1 border border-white/10 shrink-0">
+            <button onClick={() => setModoBiometrico('facial')} className={`px-2 md:px-4 py-2 md:py-3 rounded-lg md:rounded-xl text-[8px] md:text-[10px] font-black uppercase transition-all flex items-center gap-1 md:gap-2 ${modoBiometrico === 'facial' ? 'bg-orange-600 shadow-md' : 'text-slate-400 hover:text-white'}`}>
+              <ScanFace size={14} className="md:w-4 md:h-4" /> <span className="hidden sm:inline">Face ID</span>
             </button>
-            <button onClick={() => setModoBiometrico('huella')} className={`px-4 py-3 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-2 ${modoBiometrico === 'huella' ? 'bg-orange-600 shadow-md' : 'text-slate-400 hover:text-white'}`}>
-              <Fingerprint size={16} /> Lector USB
+            <button onClick={() => setModoBiometrico('huella')} className={`px-2 md:px-4 py-2 md:py-3 rounded-lg md:rounded-xl text-[8px] md:text-[10px] font-black uppercase transition-all flex items-center gap-1 md:gap-2 ${modoBiometrico === 'huella' ? 'bg-orange-600 shadow-md' : 'text-slate-400 hover:text-white'}`}>
+              <Fingerprint size={14} className="md:w-4 md:h-4" /> <span className="hidden sm:inline">Huella</span>
             </button>
           </div>
         </div>
       </header>
 
       {/* CONTENIDO PRINCIPAL DIVIDIDO */}
-      <main className="grow flex flex-col md:flex-row p-6 gap-6 w-full max-w-7xl mx-auto h-full">
+      <main className="grow flex flex-col md:flex-row p-4 md:p-6 gap-4 md:gap-6 w-full max-w-7xl mx-auto h-full">
         
-        {/* COLUMNA IZQUIERDA: BIOMETRÍA (Cámara o Huella) */}
-        <div className="w-full md:w-1/2 bg-black rounded-[48px] overflow-hidden border-4 border-slate-800 shadow-2xl relative flex flex-col items-center justify-center min-h-[50vh]">
+        {/* COLUMNA IZQUIERDA: BIOMETRÍA */}
+        <div className="w-full md:w-1/2 bg-black rounded-4xl md:rounded-[48px] overflow-hidden border-4 border-slate-800 shadow-2xl relative flex flex-col items-center justify-center min-h-75 md:min-h-[50vh]">
           {modoBiometrico === 'facial' ? (
             <>
               <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover absolute inset-0 -scale-x-100" />
               
               {!iaCargada && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-indigo-950/80 backdrop-blur-sm z-10">
-                  <Loader2 size={48} className="text-orange-500 animate-spin mb-4" />
-                  <p className="font-black uppercase tracking-widest text-orange-500 text-sm">Cargando Inteligencia Artificial...</p>
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-indigo-950/80 backdrop-blur-sm z-10 p-4 text-center">
+                  <Loader2 size={40} className="text-orange-500 animate-spin mb-4" />
+                  <p className="font-black uppercase tracking-widest text-orange-500 text-xs md:text-sm">Cargando Inteligencia Artificial...</p>
                 </div>
               )}
 
-              {/* Marco guía (Overlay) */}
-              <div className="absolute inset-0 border-12 border-black/20 pointer-events-none rounded-[40px]"></div>
+              {/* Marco guía (Overlay) adaptado a móvil */}
+              <div className="absolute inset-0 border-8 md:border-12 border-black/20 pointer-events-none rounded-[28px] md:rounded-[40px]"></div>
               <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-                <div className="w-64 h-80 border-2 border-white/50 border-dashed rounded-[60px] animate-pulse"></div>
+                <div className="w-48 h-64 md:w-64 md:h-80 border-2 border-white/50 border-dashed rounded-[40px] md:rounded-[60px] animate-pulse"></div>
               </div>
               
-              <div className="absolute bottom-6 bg-black/60 backdrop-blur-md px-6 py-2 rounded-full border border-white/10">
-                <p className="text-[10px] font-black uppercase tracking-widest text-emerald-400 flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Sistema Facial Activo
+              <div className="absolute bottom-4 md:bottom-6 bg-black/60 backdrop-blur-md px-4 py-2 rounded-full border border-white/10">
+                <p className="text-[8px] md:text-[10px] font-black uppercase tracking-widest text-emerald-400 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Sistema Activo
                 </p>
               </div>
             </>
           ) : (
-            <div className="text-center p-8 flex flex-col items-center">
-              <Fingerprint size={120} className="text-emerald-500 animate-pulse mb-6 opacity-80" />
-              <h3 className="text-2xl font-black uppercase text-white mb-2">Lector Biométrico</h3>
-              <p className="text-slate-400 text-sm font-bold uppercase tracking-widest max-w-xs leading-relaxed">
+            <div className="text-center p-6 md:p-8 flex flex-col items-center">
+              <Fingerprint size={80} className="text-emerald-500 animate-pulse mb-4 md:mb-6 opacity-80 md:w-30 md:h-30" />
+              <h3 className="text-xl md:text-2xl font-black uppercase text-white mb-2">Lector Biométrico</h3>
+              <p className="text-slate-400 text-xs md:text-sm font-bold uppercase tracking-widest max-w-xs leading-relaxed px-4">
                 Coloca tu dedo en el escáner USB para registrar tu asistencia automáticamente.
               </p>
             </div>
@@ -259,40 +251,40 @@ export default function ChecadorKiosko() {
         </div>
 
         {/* COLUMNA DERECHA: CONTROLES Y PIN */}
-        <div className="w-full md:w-1/2 bg-white rounded-[48px] p-8 md:p-10 shadow-2xl text-indigo-950 flex flex-col">
+        <div className="w-full md:w-1/2 bg-white rounded-4xl md:rounded-[48px] p-6 md:p-10 shadow-2xl text-indigo-950 flex flex-col">
           
           {/* Alertas */}
-          <div className="h-16 mb-4">
+          <div className="min-h-12 md:h-16 mb-4 flex items-center justify-center">
             {mensaje.texto && (
-              <div className={`p-4 rounded-2xl font-black uppercase text-center animate-in zoom-in duration-200 text-xs tracking-widest flex items-center justify-center h-full ${mensaje.tipo === 'exito' ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-red-100 text-red-600 border border-red-200'}`}>
+              <div className={`w-full p-3 md:p-4 rounded-xl md:rounded-2xl font-black uppercase text-center animate-in zoom-in duration-200 text-[10px] md:text-xs tracking-widest ${mensaje.tipo === 'exito' ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-red-100 text-red-600 border border-red-200'}`}>
                 {mensaje.texto}
               </div>
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-4 mb-8">
-            <button onClick={() => setTipoRegistro('entrada')} className={`p-6 rounded-3xl flex flex-col items-center gap-3 transition-all border-4 ${tipoRegistro === 'entrada' ? 'bg-emerald-50 border-emerald-500 text-emerald-600 shadow-inner' : 'bg-slate-50 border-transparent text-slate-400 hover:border-slate-200'}`}>
-              <UserCheck size={32} />
-              <span className="font-black uppercase tracking-widest text-xs">Entrada</span>
+          <div className="grid grid-cols-2 gap-3 md:gap-4 mb-6 md:mb-8">
+            <button onClick={() => setTipoRegistro('entrada')} className={`p-4 md:p-6 rounded-2xl md:rounded-3xl flex flex-col items-center gap-2 md:gap-3 transition-all border-4 ${tipoRegistro === 'entrada' ? 'bg-emerald-50 border-emerald-500 text-emerald-600 shadow-inner' : 'bg-slate-50 border-transparent text-slate-400 hover:border-slate-200'}`}>
+              <UserCheck className="w-8 h-8 md:w-10 md:h-10" />
+              <span className="font-black uppercase tracking-widest text-[10px] md:text-xs">Entrada</span>
             </button>
-            <button onClick={() => setTipoRegistro('salida')} className={`p-6 rounded-3xl flex flex-col items-center gap-3 transition-all border-4 ${tipoRegistro === 'salida' ? 'bg-red-50 border-red-500 text-red-600 shadow-inner' : 'bg-slate-50 border-transparent text-slate-400 hover:border-slate-200'}`}>
-              <LogOut size={32} />
-              <span className="font-black uppercase tracking-widest text-xs">Salida</span>
+            <button onClick={() => setTipoRegistro('salida')} className={`p-4 md:p-6 rounded-2xl md:rounded-3xl flex flex-col items-center gap-2 md:gap-3 transition-all border-4 ${tipoRegistro === 'salida' ? 'bg-red-50 border-red-500 text-red-600 shadow-inner' : 'bg-slate-50 border-transparent text-slate-400 hover:border-slate-200'}`}>
+              <LogOut className="w-8 h-8 md:w-10 md:h-10" />
+              <span className="font-black uppercase tracking-widest text-[10px] md:text-xs">Salida</span>
             </button>
           </div>
 
-          <div className="text-4xl tracking-[0.5em] mb-6 font-black h-16 bg-slate-50 rounded-2xl flex items-center justify-center border-2 border-slate-100 text-indigo-950">
+          <div className="text-3xl md:text-4xl tracking-[0.5em] mb-4 md:mb-6 font-black h-14 md:h-16 bg-slate-50 rounded-xl md:rounded-2xl flex items-center justify-center border-2 border-slate-100 text-indigo-950">
             {pin.padEnd(4, '•')}
           </div>
 
-          <div className="grid grid-cols-3 gap-3 grow max-h-100">
+          <div className="grid grid-cols-3 gap-2 md:gap-3 grow max-h-100">
             {[1,2,3,4,5,6,7,8,9].map(n => (
-              <button key={n} disabled={cargando} onClick={() => { if(pin.length < 4) setPin(pin + n.toString()) }} className="bg-slate-50 border-2 border-slate-100 rounded-2xl text-2xl font-black hover:bg-orange-50 hover:border-orange-500 transition-all active:scale-95 disabled:opacity-50">{n}</button>
+              <button key={n} disabled={cargando} onClick={() => { if(pin.length < 4) setPin(pin + n.toString()) }} className="bg-slate-50 border-2 border-slate-100 rounded-xl md:rounded-2xl text-xl md:text-2xl font-black hover:bg-orange-50 hover:border-orange-500 transition-all active:scale-95 disabled:opacity-50 py-3 md:py-0">{n}</button>
             ))}
-            <button disabled={cargando} onClick={() => { setPin(""); setMensaje({texto:'', tipo:''}); }} className="bg-red-50 text-red-500 rounded-2xl font-black hover:bg-red-100 disabled:opacity-50">C</button>
-            <button disabled={cargando} onClick={() => { if(pin.length < 4) setPin(pin + '0') }} className="bg-slate-50 border-2 border-slate-100 rounded-2xl text-2xl font-black hover:bg-orange-50 transition-all disabled:opacity-50">0</button>
-            <button disabled={cargando || pin.length !== 4} onClick={procesarRegistro} className="bg-indigo-950 text-white rounded-2xl font-black hover:bg-indigo-800 flex items-center justify-center disabled:opacity-50 disabled:bg-slate-300 transition-all shadow-xl shadow-indigo-900/20 active:scale-95">
-              {cargando ? <Loader2 className="animate-spin" /> : <ShieldCheck size={32}/>}
+            <button disabled={cargando} onClick={() => { setPin(""); setMensaje({texto:'', tipo:''}); }} className="bg-red-50 text-red-500 rounded-xl md:rounded-2xl font-black hover:bg-red-100 disabled:opacity-50 py-3 md:py-0">C</button>
+            <button disabled={cargando} onClick={() => { if(pin.length < 4) setPin(pin + '0') }} className="bg-slate-50 border-2 border-slate-100 rounded-xl md:rounded-2xl text-xl md:text-2xl font-black hover:bg-orange-50 transition-all disabled:opacity-50 py-3 md:py-0">0</button>
+            <button disabled={cargando || pin.length !== 4} onClick={procesarRegistro} className="bg-indigo-950 text-white rounded-xl md:rounded-2xl font-black hover:bg-indigo-800 flex items-center justify-center disabled:opacity-50 disabled:bg-slate-300 transition-all shadow-xl shadow-indigo-900/20 active:scale-95 py-3 md:py-0">
+              {cargando ? <Loader2 className="animate-spin" /> : <ShieldCheck size={28}/>}
             </button>
           </div>
           
