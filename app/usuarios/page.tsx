@@ -4,47 +4,19 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { 
   UserPlus, Trash2, ArrowLeft, Key, Loader2, 
-  ShieldCheck, Edit2, PlusCircle, Check, Plus, // <-- Añadido el Plus aquí
-  Clock, Calculator, ScanFace, Camera, DollarSign, Users, X
+  ShieldCheck, Edit2, PlusCircle, Check, Plus,
+  Clock, Calculator, ScanFace, Camera, DollarSign, Users, X,
+  ClipboardCheck, Calendar // <-- Nuevos íconos para las asistencias
 } from 'lucide-react';
 import Link from 'next/link';
 import * as faceapi from 'face-api.js';
 
-// --- INTERFACES ESTRICTAS PARA TYPESCRIPT ---
-interface UsuarioLogueado {
-  id: string;
-  nombre: string;
-  rol: string;
-}
-
-interface Turno {
-  id: string; 
-  nombre: string; 
-  hora_entrada: string; 
-  hora_salida: string; 
-  tolerancia_minutos: number;
-}
-
-interface Usuario {
-  id: string;
-  nombre: string;
-  pin: string;
-  rol: string; 
-  turno_id?: string; 
-  sueldo_semanal?: number; 
-  qr_codigo?: string;
-  rostro_descriptor?: number[]; 
-  turnos?: Turno;
-}
-
-interface ModuloPermisos {
-  comandas: boolean;
-  caja: boolean;
-  cocina: boolean;
-  inventario: boolean;
-  reportes: boolean;
-  admin: boolean;
-}
+// --- INTERFACES ---
+interface UsuarioLogueado { id: string; nombre: string; rol: string; }
+interface Turno { id: string; nombre: string; hora_entrada: string; hora_salida: string; tolerancia_minutos: number; }
+interface Usuario { id: string; nombre: string; pin: string; rol: string; turno_id?: string; sueldo_semanal?: number; qr_codigo?: string; rostro_descriptor?: number[]; turnos?: Turno; }
+interface ModuloPermisos { comandas: boolean; caja: boolean; cocina: boolean; inventario: boolean; reportes: boolean; admin: boolean; }
+interface Asistencia { id: string; usuario_id: string; tipo_registro: string; metodo: string; estatus_puntualidad: string; created_at: string; }
 
 type MatrizPermisos = Record<string, ModuloPermisos>;
 
@@ -65,13 +37,20 @@ export default function UsuariosPage() {
   const [usuarios, setUsuarios] = useState<Usuario[]>([]);
   const [turnos, setTurnos] = useState<Turno[]>([]);
   const [cargando, setCargando] = useState(true);
-  const [vista, setVista] = useState<'staff' | 'permisos' | 'turnos' | 'nomina'>('staff');
+  
+  // VISTAS ACTUALIZADAS CON "ASISTENCIAS"
+  const [vista, setVista] = useState<'staff' | 'permisos' | 'turnos' | 'asistencias' | 'nomina'>('staff');
   
   const [modalAbierto, setModalAbierto] = useState(false);
   const [form, setForm] = useState({ id: '', nombre: '', pin: '', rol: 'mesero', sueldo_semanal: 0, turno_id: '' });
 
   const [nuevoRolInput, setNuevoRolInput] = useState("");
   const [permisos, setPermisos] = useState<MatrizPermisos>(permisosBase);
+
+  // ASISTENCIAS Y FECHAS
+  const hoy = new Date().toISOString().split('T')[0];
+  const [fechaAsistencias, setFechaAsistencias] = useState<string>(hoy);
+  const [listaAsistencias, setListaAsistencias] = useState<Asistencia[]>([]);
 
   // ESTADOS NUEVOS PARA HR E IA
   const [iaCargada, setIaCargada] = useState(false);
@@ -102,10 +81,9 @@ export default function UsuariosPage() {
     cargarModelosIA();
   }, []);
 
-  // --- SOLUCIÓN DEL BUG DE LA CÁMARA ---
+  // Control Cámara Móvil
   useEffect(() => {
     let streamActivo: MediaStream | null = null;
-
     if (modalRostro) {
       setTimeout(async () => {
         const nodoVideo = videoRef.current;
@@ -123,28 +101,18 @@ export default function UsuariosPage() {
         }
       }, 200);
     }
-
-    return () => {
-      // CORRECCIÓN: Solo limpiamos el stream guardado, evitamos usar la referencia de React
-      if (streamActivo) {
-        streamActivo.getTracks().forEach(track => track.stop());
-      }
-    };
+    return () => { if (streamActivo) streamActivo.getTracks().forEach(track => track.stop()); };
   }, [modalRostro]);
-  // ----------------------------------------------------------------
 
+  // Inicializar Seguridad
   useEffect(() => {
     const inicializarDatos = async () => {
       const userGuardado = localStorage.getItem('usuarioRestaSoft');
       let userParaSetear = null;
-
       if (userGuardado) {
         const parsed = JSON.parse(userGuardado);
-        if (parsed.rol === 'admin') {
-          userParaSetear = parsed;
-        }
+        if (parsed.rol === 'admin') userParaSetear = parsed;
       }
-      
       const permisosGuardados = localStorage.getItem('roles_permisos_restasoft');
       const permisosParaSetear = permisosGuardados ? JSON.parse(permisosGuardados) : permisosBase;
 
@@ -152,7 +120,6 @@ export default function UsuariosPage() {
       setUsuarioActivo(userParaSetear);
       setCargando(false);
     };
-
     inicializarDatos();
   }, []);
 
@@ -185,48 +152,52 @@ export default function UsuariosPage() {
     setTurnos(data as Turno[] || []);
   }, []);
 
+  // FETCH ASISTENCIAS DEL DÍA
+  const fetchAsistencias = useCallback(async () => {
+    if (!fechaAsistencias) return;
+    const inicio = new Date(`${fechaAsistencias}T00:00:00`).toISOString();
+    const fin = new Date(`${fechaAsistencias}T23:59:59`).toISOString();
+
+    const { data } = await supabase
+      .from('asistencias')
+      .select('*')
+      .gte('created_at', inicio)
+      .lte('created_at', fin)
+      .order('created_at', { ascending: true });
+
+    setListaAsistencias(data as Asistencia[] || []);
+  }, [fechaAsistencias]);
+
   useEffect(() => {
     let montado = true;
     const cargarDatosCentrales = async () => {
       if (usuarioActivo && montado) {
         await fetchUsuarios();
         await fetchTurnos();
+        if (vista === 'asistencias') await fetchAsistencias();
       }
     };
     cargarDatosCentrales();
     return () => { montado = false; };
-  }, [fetchUsuarios, fetchTurnos, usuarioActivo]);
+  }, [fetchUsuarios, fetchTurnos, fetchAsistencias, usuarioActivo, vista]);
+
 
   // --- LÓGICA DE ROLES MEJORADA ---
   const agregarNuevoRol = () => {
     const rolFormateado = nuevoRolInput.trim().toLowerCase();
     if (!rolFormateado) return;
-    if (permisos[rolFormateado]) {
-      alert("Esta categoría ya existe");
-      return;
-    }
+    if (permisos[rolFormateado]) { alert("Esta categoría ya existe"); return; }
     
-    const nuevosPermisos: MatrizPermisos = { 
-      ...permisos, 
-      [rolFormateado]: { comandas: false, caja: false, cocina: false, inventario: false, reportes: false, admin: false } 
-    };
-    
+    const nuevosPermisos: MatrizPermisos = { ...permisos, [rolFormateado]: { comandas: false, caja: false, cocina: false, inventario: false, reportes: false, admin: false } };
     setPermisos(nuevosPermisos);
     localStorage.setItem('roles_permisos_restasoft', JSON.stringify(nuevosPermisos));
     setNuevoRolInput("");
   };
 
   const eliminarRol = (rolName: string) => {
-    if (rolName === 'admin') {
-      alert("No puedes eliminar el rol de Administrador por seguridad del sistema.");
-      return;
-    }
-
+    if (rolName === 'admin') { alert("No puedes eliminar el rol de Administrador por seguridad del sistema."); return; }
     const usuariosConRol = usuarios.filter(u => u.rol === rolName);
-    if (usuariosConRol.length > 0) {
-      alert(`No puedes eliminar "${rolName}" porque hay ${usuariosConRol.length} usuario(s) usándolo. Cámbiales el rol primero.`);
-      return;
-    }
+    if (usuariosConRol.length > 0) { alert(`No puedes eliminar "${rolName}" porque hay ${usuariosConRol.length} usuario(s) usándolo. Cámbiales el rol primero.`); return; }
 
     if (confirm(`¿Seguro que quieres eliminar la categoría "${rolName}"?`)) {
       const copia = { ...permisos };
@@ -242,16 +213,9 @@ export default function UsuariosPage() {
     localStorage.setItem('roles_permisos_restasoft', JSON.stringify(nuevosPermisos));
   };
 
-  // --- LÓGICA DE ROSTROS CORREGIDA ---
-  const abrirRegistroRostro = (usuario: Usuario) => {
-    setUsuarioEnRostro(usuario);
-    setModalRostro(true); 
-  };
-
-  const cerrarRegistroRostro = () => {
-    setModalRostro(false); 
-    setUsuarioEnRostro(null);
-  };
+  // --- LÓGICA DE ROSTROS ---
+  const abrirRegistroRostro = (usuario: Usuario) => { setUsuarioEnRostro(usuario); setModalRostro(true); };
+  const cerrarRegistroRostro = () => { setModalRostro(false); setUsuarioEnRostro(null); };
 
   const capturarYGuardarRostro = async () => {
     if (!videoRef.current || !usuarioEnRostro) return;
@@ -261,22 +225,15 @@ export default function UsuariosPage() {
       if (!deteccion) throw new Error("No detectó ningún rostro. Mira fijamente a la cámara con buena luz.");
       
       const descriptorArray = Array.from(deteccion.descriptor);
-      
-      const { error } = await supabase.from('usuarios')
-        .update({ rostro_descriptor: descriptorArray })
-        .eq('id', usuarioEnRostro.id);
-        
+      const { error } = await supabase.from('usuarios').update({ rostro_descriptor: descriptorArray }).eq('id', usuarioEnRostro.id);
       if (error) throw error;
       
       alert("¡Rostro registrado exitosamente para " + usuarioEnRostro.nombre + "!");
       cerrarRegistroRostro();
       await fetchUsuarios();
     } catch (err: unknown) {
-      if (err instanceof Error) {
-        alert(err.message);
-      } else {
-        alert("Ocurrió un error desconocido.");
-      }
+      if (err instanceof Error) alert(err.message);
+      else alert("Ocurrió un error desconocido.");
     } finally {
       setEscaneando(false);
     }
@@ -285,14 +242,7 @@ export default function UsuariosPage() {
   // --- LÓGICA DE USUARIOS ---
   const guardarUsuario = async () => {
     if (!form.nombre || form.pin.length !== 4) return alert("Nombre y PIN de 4 dígitos requeridos");
-    
-    const payload = {
-      nombre: form.nombre,
-      pin: form.pin,
-      rol: form.rol,
-      sueldo_semanal: form.sueldo_semanal || 0,
-      turno_id: form.turno_id || null
-    };
+    const payload = { nombre: form.nombre, pin: form.pin, rol: form.rol, sueldo_semanal: form.sueldo_semanal || 0, turno_id: form.turno_id || null };
 
     if (form.id) {
       const { error } = await supabase.from('usuarios').update(payload).eq('id', form.id);
@@ -311,28 +261,17 @@ export default function UsuariosPage() {
     }
   };
 
-  const abrirEditar = (u: Usuario) => {
-    setForm({ id: u.id, nombre: u.nombre, pin: u.pin, rol: u.rol, sueldo_semanal: u.sueldo_semanal || 0, turno_id: u.turno_id || '' });
-    setModalAbierto(true);
-  };
-
-  const cerrarModal = () => {
-    setModalAbierto(false);
-    setForm({ id: '', nombre: '', pin: '', rol: Object.keys(permisos)[0], sueldo_semanal: 0, turno_id: '' });
-  };
+  const abrirEditar = (u: Usuario) => { setForm({ id: u.id, nombre: u.nombre, pin: u.pin, rol: u.rol, sueldo_semanal: u.sueldo_semanal || 0, turno_id: u.turno_id || '' }); setModalAbierto(true); };
+  const cerrarModal = () => { setModalAbierto(false); setForm({ id: '', nombre: '', pin: '', rol: Object.keys(permisos)[0], sueldo_semanal: 0, turno_id: '' }); };
 
   // --- LÓGICA DE TURNOS ---
   const guardarTurno = async () => {
     if (!formTurno.nombre) return alert("Ponle un nombre al turno");
-    if (editandoTurnoId) {
-      await supabase.from('turnos').update(formTurno).eq('id', editandoTurnoId);
-    } else {
-      await supabase.from('turnos').insert([formTurno]);
-    }
+    if (editandoTurnoId) await supabase.from('turnos').update(formTurno).eq('id', editandoTurnoId);
+    else await supabase.from('turnos').insert([formTurno]);
     setModalTurno(false);
     await fetchTurnos();
   };
-
 
   if (!usuarioActivo && !cargando) {
     return (
@@ -341,12 +280,8 @@ export default function UsuariosPage() {
         <div className="bg-white p-10 rounded-[48px] text-slate-900 shadow-2xl w-full max-w-sm text-center">
           <h2 className="text-xl font-bold uppercase mb-2 text-indigo-950">Panel de Control</h2>
           <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-8">Acceso solo a Administradores</p>
-          
-          <div className="text-5xl tracking-[0.5em] mb-8 font-black text-indigo-950 h-14 bg-slate-50 rounded-2xl flex items-center justify-center border-2 border-slate-100">
-            {pinLogin.padEnd(4, '•')}
-          </div>
+          <div className="text-5xl tracking-[0.5em] mb-8 font-black text-indigo-950 h-14 bg-slate-50 rounded-2xl flex items-center justify-center border-2 border-slate-100">{pinLogin.padEnd(4, '•')}</div>
           {errorLogin && <p className="text-red-500 font-bold text-sm mb-4 animate-bounce">{errorLogin}</p>}
-
           <div className="grid grid-cols-3 gap-3">
             {[1,2,3,4,5,6,7,8,9].map(n => (
               <button key={n} onClick={() => { if(pinLogin.length < 4) setPinLogin(pinLogin + n) }} className="bg-slate-50 border-2 border-slate-100 p-5 rounded-2xl text-2xl font-black text-indigo-950 hover:bg-orange-50 hover:border-orange-500 transition-all active:scale-95">{n}</button>
@@ -366,23 +301,24 @@ export default function UsuariosPage() {
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-20">
       <header className="bg-indigo-950 text-white p-8 shadow-xl">
-        <div className="max-w-6xl mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-4">
+        <div className="max-w-6xl mx-auto flex justify-between items-center overflow-x-auto hide-scrollbar">
+          <div className="flex items-center gap-4 shrink-0 mr-8">
             <Link href="/" className="p-2 hover:bg-white/10 rounded-full transition-all"><ArrowLeft size={24} /></Link>
-            <h1 className="text-3xl font-black uppercase italic tracking-tighter">Administración</h1>
+            <h1 className="text-3xl font-black uppercase italic tracking-tighter">RRHH</h1>
           </div>
-          <div className="bg-white/10 p-1 rounded-2xl flex gap-1">
-            <button onClick={() => setVista('staff')} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${vista === 'staff' ? 'bg-orange-600' : 'text-slate-400 hover:text-white'}`}><Users size={14} className="inline mr-1" /> Staff</button>
-            <button onClick={() => setVista('permisos')} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${vista === 'permisos' ? 'bg-orange-600' : 'text-slate-400 hover:text-white'}`}><ShieldCheck size={14} className="inline mr-1"/> Roles</button>
-            <button onClick={() => setVista('turnos')} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${vista === 'turnos' ? 'bg-orange-600' : 'text-slate-400 hover:text-white'}`}><Clock size={14} className="inline mr-1"/> Turnos</button>
-            <button onClick={() => setVista('nomina')} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${vista === 'nomina' ? 'bg-orange-600' : 'text-slate-400 hover:text-white'}`}><Calculator size={14} className="inline mr-1"/> Nómina</button>
+          <div className="bg-white/10 p-1 rounded-2xl flex gap-1 shrink-0">
+            <button onClick={() => setVista('staff')} className={`px-4 md:px-6 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-1 ${vista === 'staff' ? 'bg-orange-600' : 'text-slate-400 hover:text-white'}`}><Users size={14} /> <span className="hidden sm:inline">Staff</span></button>
+            <button onClick={() => setVista('permisos')} className={`px-4 md:px-6 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-1 ${vista === 'permisos' ? 'bg-orange-600' : 'text-slate-400 hover:text-white'}`}><ShieldCheck size={14} /> <span className="hidden sm:inline">Roles</span></button>
+            <button onClick={() => setVista('turnos')} className={`px-4 md:px-6 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-1 ${vista === 'turnos' ? 'bg-orange-600' : 'text-slate-400 hover:text-white'}`}><Clock size={14} /> <span className="hidden sm:inline">Turnos</span></button>
+            <button onClick={() => setVista('asistencias')} className={`px-4 md:px-6 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-1 ${vista === 'asistencias' ? 'bg-orange-600' : 'text-slate-400 hover:text-white'}`}><ClipboardCheck size={14} /> <span className="hidden sm:inline">Asistencias</span></button>
+            <button onClick={() => setVista('nomina')} className={`px-4 md:px-6 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-1 ${vista === 'nomina' ? 'bg-orange-600' : 'text-slate-400 hover:text-white'}`}><Calculator size={14} /> <span className="hidden sm:inline">Nómina</span></button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto p-8">
+      <main className="max-w-6xl mx-auto p-4 md:p-8">
         
-        {vista === 'staff' ? (
+        {vista === 'staff' && (
           <div className="animate-in fade-in">
             <div className="flex justify-between items-center mb-6">
                <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Control de Empleados</p>
@@ -395,16 +331,10 @@ export default function UsuariosPage() {
                   <div>
                     <div className="flex justify-between items-start mb-2">
                       <h3 className="font-black text-xl text-indigo-950 uppercase mb-1">{u.nombre}</h3>
-                      <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${u.rol === 'admin' ? 'bg-indigo-950 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                        {u.rol}
-                      </span>
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${u.rol === 'admin' ? 'bg-indigo-950 text-white' : 'bg-slate-100 text-slate-500'}`}>{u.rol}</span>
                     </div>
-                    <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 mb-2">
-                      <Key size={12} className="text-orange-500"/> PIN: {u.pin}
-                    </p>
-                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-1">
-                      <Clock size={14}/> {u.turnos?.nombre || 'Sin Turno Asignado'}
-                    </p>
+                    <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 mb-2"><Key size={12} className="text-orange-500"/> PIN: {u.pin}</p>
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-1"><Clock size={14}/> {u.turnos?.nombre || 'Sin Turno Asignado'}</p>
                     <div className="bg-slate-50 p-3 rounded-2xl flex justify-between items-center mb-6">
                       <span className="text-[10px] font-black text-slate-400 uppercase">Sueldo Base</span>
                       <span className="text-lg font-black text-emerald-600">${u.sueldo_semanal || 0}/sem</span>
@@ -416,41 +346,98 @@ export default function UsuariosPage() {
                       <ScanFace size={18} className="mb-1" />
                       <span className="text-[8px] font-black uppercase">{u.rostro_descriptor ? 'Rostro OK' : 'Capturar Cara'}</span>
                     </button>
-                    <button onClick={() => abrirEditar(u)} className="grow flex items-center justify-center gap-2 bg-slate-50 text-indigo-950 font-black py-3 rounded-xl text-[10px] uppercase tracking-widest hover:bg-slate-200 transition-all">
-                      <Edit2 size={14} /> Editar
-                    </button>
-                    <button onClick={() => eliminarUsuario(u.id)} className="flex items-center justify-center bg-red-50 text-red-500 p-3 rounded-xl hover:bg-red-500 hover:text-white transition-all">
-                      <Trash2 size={16} />
-                    </button>
+                    <button onClick={() => abrirEditar(u)} className="grow flex items-center justify-center gap-2 bg-slate-50 text-indigo-950 font-black py-3 rounded-xl text-[10px] uppercase tracking-widest hover:bg-slate-200 transition-all"><Edit2 size={14} /> Editar</button>
+                    <button onClick={() => eliminarUsuario(u.id)} className="flex items-center justify-center bg-red-50 text-red-500 p-3 rounded-xl hover:bg-red-500 hover:text-white transition-all"><Trash2 size={16} /></button>
                   </div>
                 </div>
               ))}
             </div>
           </div>
-        ) : vista === 'permisos' ? (
+        )}
 
+        {/* --- NUEVA PESTAÑA: ASISTENCIAS --- */}
+        {vista === 'asistencias' && (
+          <div className="animate-in fade-in bg-white p-8 rounded-[48px] shadow-sm border-2 border-slate-100">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4 border-b border-slate-100 pb-8">
+              <div>
+                <h2 className="text-2xl font-black text-indigo-950 uppercase italic">Control de Asistencia</h2>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">4 Chequeos Diarios por Empleado</p>
+              </div>
+              <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-2xl border border-slate-200">
+                <Calendar size={20} className="text-orange-500 ml-2" />
+                <input 
+                  type="date" 
+                  className="bg-transparent font-black text-indigo-950 outline-none px-2 uppercase tracking-widest text-sm cursor-pointer"
+                  value={fechaAsistencias}
+                  onChange={(e) => setFechaAsistencias(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-200">
+                <thead>
+                  <tr className="border-b-2 border-slate-100 bg-slate-50/50">
+                    <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest rounded-tl-2xl">Empleado</th>
+                    <th className="p-4 text-[10px] font-black text-emerald-600 uppercase tracking-widest text-center border-l border-slate-100">1. Entrada</th>
+                    <th className="p-4 text-[10px] font-black text-orange-500 uppercase tracking-widest text-center border-l border-slate-100">2. Salida a Comer</th>
+                    <th className="p-4 text-[10px] font-black text-emerald-600 uppercase tracking-widest text-center border-l border-slate-100">3. Regreso Comida</th>
+                    <th className="p-4 text-[10px] font-black text-red-500 uppercase tracking-widest text-center border-l border-slate-100 rounded-tr-2xl">4. Salida Turno</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {usuarios.map(u => {
+                    // Filtramos las asistencias de este empleado en el día seleccionado
+                    const susAsistencias = listaAsistencias.filter(a => a.usuario_id === u.id);
+                    const t1 = susAsistencias[0]; // Primer checada (Idealmente Entrada)
+                    const t2 = susAsistencias[1]; // Segunda (Idealmente Salida a comer)
+                    const t3 = susAsistencias[2]; // Tercera (Idealmente Regreso)
+                    const t4 = susAsistencias[3]; // Cuarta (Idealmente Salida final)
+
+                    const formatTime = (asist?: Asistencia) => {
+                      if (!asist) return <span className="text-slate-300">--:--</span>;
+                      const time = new Date(asist.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                      const esRetardo = asist.estatus_puntualidad === 'retardo';
+                      return (
+                        <div className="flex flex-col items-center">
+                          <span className={`text-sm font-black ${esRetardo ? 'text-red-500' : 'text-indigo-950'}`}>{time}</span>
+                          {esRetardo && <span className="text-[8px] bg-red-100 text-red-600 px-2 py-0.5 rounded-full uppercase mt-1">Retardo</span>}
+                        </div>
+                      );
+                    };
+
+                    return (
+                      <tr key={u.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="p-4">
+                          <p className="font-black text-indigo-950 uppercase text-sm">{u.nombre}</p>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase">{u.turnos?.nombre || 'Sin Turno'}</p>
+                        </td>
+                        <td className="p-4 text-center border-l border-slate-100">{formatTime(t1)}</td>
+                        <td className="p-4 text-center border-l border-slate-100">{formatTime(t2)}</td>
+                        <td className="p-4 text-center border-l border-slate-100">{formatTime(t3)}</td>
+                        <td className="p-4 text-center border-l border-slate-100">{formatTime(t4)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ... (El resto de pestañas de roles, turnos y nómina permanecen idénticas) ... */}
+        {vista === 'permisos' && (
           <div className="bg-white p-8 rounded-4xl border-2 border-slate-100 shadow-sm overflow-x-auto animate-in fade-in">
             <div className="flex justify-between items-center mb-6">
               <div>
                 <h2 className="text-2xl font-black text-indigo-950 uppercase italic mb-1 flex items-center gap-3"><ShieldCheck className="text-orange-500"/> Matriz de Accesos</h2>
                 <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Define a qué pantallas puede entrar cada perfil</p>
               </div>
-              
               <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-2xl border border-slate-100">
-                <input 
-                  type="text" 
-                  placeholder="Ej: Bartender..." 
-                  className="bg-transparent font-bold text-sm outline-none px-3 text-indigo-950 uppercase w-32"
-                  value={nuevoRolInput}
-                  onChange={(e) => setNuevoRolInput(e.target.value)}
-                  onKeyDown={(e) => { if(e.key === 'Enter') agregarNuevoRol() }}
-                />
-                <button onClick={agregarNuevoRol} className="bg-indigo-950 text-white p-2 rounded-xl hover:bg-indigo-800 transition-all shadow-md">
-                  <PlusCircle size={18} />
-                </button>
+                <input type="text" placeholder="Ej: Bartender..." className="bg-transparent font-bold text-sm outline-none px-3 text-indigo-950 uppercase w-32" value={nuevoRolInput} onChange={(e) => setNuevoRolInput(e.target.value)} onKeyDown={(e) => { if(e.key === 'Enter') agregarNuevoRol() }} />
+                <button onClick={agregarNuevoRol} className="bg-indigo-950 text-white p-2 rounded-xl hover:bg-indigo-800 transition-all shadow-md"><PlusCircle size={18} /></button>
               </div>
             </div>
-            
             <table className="w-full text-left">
               <thead>
                 <tr className="text-[10px] uppercase text-slate-400 font-black tracking-widest border-b-2 border-slate-100">
@@ -473,22 +460,14 @@ export default function UsuariosPage() {
                     {(['comandas', 'caja', 'cocina', 'inventario', 'reportes'] as Array<keyof ModuloPermisos>).map(mod => (
                       <td key={mod} className="py-4 text-center">
                         <label className="relative inline-flex items-center cursor-pointer">
-                          <input 
-                            type="checkbox" 
-                            className="sr-only peer"
-                            checked={permisos[rol][mod]}
-                            onChange={() => togglePermiso(rol, mod)}
-                            disabled={rol === 'admin'} 
-                          />
+                          <input type="checkbox" className="sr-only peer" checked={permisos[rol][mod]} onChange={() => togglePermiso(rol, mod)} disabled={rol === 'admin'} />
                           <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 peer-disabled:opacity-50"></div>
                         </label>
                       </td>
                     ))}
                     <td className="py-4 text-center">
                       {rol !== 'admin' && (
-                        <button onClick={() => eliminarRol(rol)} className="bg-red-50 text-red-500 hover:bg-red-500 hover:text-white transition-colors p-2 rounded-xl mx-auto flex" title="Eliminar Categoría">
-                          <Trash2 size={16} />
-                        </button>
+                        <button onClick={() => eliminarRol(rol)} className="bg-red-50 text-red-500 hover:bg-red-500 hover:text-white transition-colors p-2 rounded-xl mx-auto flex" title="Eliminar Categoría"><Trash2 size={16} /></button>
                       )}
                     </td>
                   </tr>
@@ -496,14 +475,14 @@ export default function UsuariosPage() {
               </tbody>
             </table>
           </div>
-        ) : vista === 'turnos' ? (
+        )}
 
+        {vista === 'turnos' && (
           <div className="animate-in fade-in">
             <div className="flex justify-between items-center mb-6">
               <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Configuración de Horarios</p>
               <button onClick={() => { setFormTurno({ nombre: '', hora_entrada: '08:00', hora_salida: '16:00', tolerancia_minutos: 15 }); setEditandoTurnoId(null); setModalTurno(true); }} className="bg-orange-600 text-white px-6 py-3 rounded-2xl font-black uppercase text-xs flex items-center gap-2 hover:bg-orange-500 shadow-xl"><Plus size={18}/> Nuevo Turno</button>
             </div>
-            
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {turnos.map(t => (
                 <div key={t.id} className="bg-white rounded-4xl p-6 shadow-sm border-2 border-slate-100 flex justify-between items-center">
@@ -517,9 +496,9 @@ export default function UsuariosPage() {
               ))}
             </div>
           </div>
+        )}
 
-        ) : vista === 'nomina' ? (
-
+        {vista === 'nomina' && (
           <div className="animate-in fade-in bg-white p-8 rounded-[48px] shadow-sm border-2 border-slate-100">
             <div className="flex justify-between items-center mb-8 pb-8 border-b border-slate-100">
               <div>
@@ -528,7 +507,6 @@ export default function UsuariosPage() {
               </div>
               <button className="bg-emerald-500 text-white px-6 py-3 rounded-2xl font-black uppercase text-xs hover:bg-emerald-400 shadow-xl shadow-emerald-500/20">Imprimir Reporte</button>
             </div>
-
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
@@ -546,7 +524,6 @@ export default function UsuariosPage() {
                     const tarifaHora = sueldoSemanal / 48; 
                     const pagoExtra = hrsExtra * tarifaHora;
                     const pagoTotal = sueldoSemanal + pagoExtra;
-
                     return (
                       <tr key={u.id} className="hover:bg-slate-50 transition-colors">
                         <td className="py-6">
@@ -556,20 +533,12 @@ export default function UsuariosPage() {
                         <td className="py-6 font-black text-slate-600">${sueldoSemanal.toFixed(2)}</td>
                         <td className="py-6">
                           <div className="flex items-center gap-2">
-                            <input 
-                              type="number" min="0" step="0.5" 
-                              className="w-20 bg-slate-100 border-2 border-transparent focus:border-orange-500 rounded-xl p-2 font-black text-center text-indigo-950 outline-none"
-                              value={hrsExtra === 0 ? '' : hrsExtra}
-                              placeholder="0"
-                              onChange={(e) => setHorasExtraAprobadas({...horasExtraAprobadas, [u.id]: Number(e.target.value)})}
-                            />
+                            <input type="number" min="0" step="0.5" className="w-20 bg-slate-100 border-2 border-transparent focus:border-orange-500 rounded-xl p-2 font-black text-center text-indigo-950 outline-none" value={hrsExtra === 0 ? '' : hrsExtra} placeholder="0" onChange={(e) => setHorasExtraAprobadas({...horasExtraAprobadas, [u.id]: Number(e.target.value)})} />
                             <span className="text-[10px] font-bold text-slate-400 uppercase">Hrs</span>
                           </div>
                         </td>
                         <td className="py-6 text-right">
-                          <span className={`text-xl font-black ${hrsExtra > 0 ? 'text-emerald-600' : 'text-indigo-950'}`}>
-                            ${pagoTotal.toFixed(2)}
-                          </span>
+                          <span className={`text-xl font-black ${hrsExtra > 0 ? 'text-emerald-600' : 'text-indigo-950'}`}>${pagoTotal.toFixed(2)}</span>
                         </td>
                       </tr>
                     )
@@ -578,17 +547,14 @@ export default function UsuariosPage() {
               </table>
             </div>
           </div>
-
-        ) : null}
+        )}
       </main>
 
-      {/* --- MODAL CREAR/EDITAR EMPLEADO --- */}
+      {/* --- MODALES --- */}
       {modalAbierto && (
         <div className="fixed inset-0 bg-indigo-950/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-md rounded-[48px] p-10 shadow-2xl">
-            <h2 className="text-2xl font-black text-indigo-950 uppercase italic mb-8 text-center">
-              {form.id ? 'Editar Perfil' : 'Nuevo Acceso'}
-            </h2>
+            <h2 className="text-2xl font-black text-indigo-950 uppercase italic mb-8 text-center">{form.id ? 'Editar Perfil' : 'Nuevo Acceso'}</h2>
             <div className="space-y-4">
               <div>
                 <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">Nombre del Empleado</label>
@@ -602,13 +568,10 @@ export default function UsuariosPage() {
                 <div>
                   <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">Categoría / Rol</label>
                   <select className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950 uppercase" value={form.rol} onChange={e => setForm({...form, rol: e.target.value})}>
-                    {Object.keys(permisos).map(rolName => (
-                      <option key={rolName} value={rolName}>{rolName}</option>
-                    ))}
+                    {Object.keys(permisos).map(rolName => <option key={rolName} value={rolName}>{rolName}</option>)}
                   </select>
                 </div>
               </div>
-              
               <div>
                 <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">Turno Asignado</label>
                 <select className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950 uppercase text-xs" value={form.turno_id || ''} onChange={e => setForm({...form, turno_id: e.target.value})}>
@@ -616,7 +579,6 @@ export default function UsuariosPage() {
                   {turnos.map(t => <option key={t.id} value={t.id}>{t.nombre} ({t.hora_entrada} - {t.hora_salida})</option>)}
                 </select>
               </div>
-
               <div>
                 <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">Sueldo Semanal Base</label>
                 <div className="relative">
@@ -633,7 +595,6 @@ export default function UsuariosPage() {
         </div>
       )}
 
-      {/* --- MODAL CREAR/EDITAR TURNO --- */}
       {modalTurno && (
         <div className="fixed inset-0 bg-indigo-950/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-[48px] p-10 shadow-2xl">
@@ -663,15 +624,12 @@ export default function UsuariosPage() {
         </div>
       )}
 
-      {/* --- MODAL REGISTRO ROSTRO IA --- */}
       {modalRostro && usuarioEnRostro && (
         <div className="fixed inset-0 bg-indigo-950/90 backdrop-blur-md flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-lg rounded-[48px] p-10 shadow-2xl text-center relative overflow-hidden">
             <button onClick={cerrarRegistroRostro} className="absolute top-6 right-6 text-slate-300 hover:text-red-500 bg-slate-100 p-2 rounded-full"><X size={20}/></button>
-            
             <h2 className="text-3xl font-black text-indigo-950 uppercase italic mb-2">Biometría</h2>
             <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-8">Registrando rostro de: <span className="text-orange-500">{usuarioEnRostro.nombre}</span></p>
-
             <div className="relative w-64 h-64 mx-auto bg-black rounded-full overflow-hidden border-8 border-slate-100 mb-8 shadow-inner">
               <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover transform scale-x-[-1]" />
               {escaneando && (
@@ -680,16 +638,13 @@ export default function UsuariosPage() {
                 </div>
               )}
             </div>
-
-            <p className="text-xs font-bold text-slate-500 mb-8 px-8">Pídele al empleado que mire fijamente a la cámara con buena iluminación y sin accesorios (lentes oscuros, gorras).</p>
-
+            <p className="text-xs font-bold text-slate-500 mb-8 px-8">Pídele al empleado que mire fijamente a la cámara con buena iluminación y sin accesorios.</p>
             <button disabled={escaneando || !iaCargada} onClick={capturarYGuardarRostro} className="w-full bg-emerald-500 text-white font-black py-5 rounded-2xl flex items-center justify-center gap-2 hover:bg-emerald-400 shadow-xl shadow-emerald-500/30 uppercase tracking-widest text-sm transition-all disabled:opacity-50">
               {escaneando ? <><Loader2 className="animate-spin"/> Analizando Mapas Faciales...</> : <><Camera /> Capturar y Guardar Rostro</>}
             </button>
           </div>
         </div>
       )}
-
     </div>
   );
 }
