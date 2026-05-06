@@ -5,7 +5,8 @@ import { supabase } from '@/lib/supabase';
 import { 
   BarChart3, DollarSign, CreditCard, ShoppingBag, 
   ArrowLeft, Calendar, Loader2, TrendingUp, ArrowDownCircle, Wallet,
-  Printer, TrendingDown as TrendingDownIcon, UtensilsCrossed, AlertTriangle, ShieldCheck, Banknote
+  Printer, TrendingDown as TrendingDownIcon, UtensilsCrossed, AlertTriangle, ShieldCheck, Banknote,
+  PieChart
 } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -24,7 +25,11 @@ interface Egreso {
 }
 
 interface PedidoItem {
-  cantidad: number; productos: { nombre: string };
+  cantidad: number; 
+  productos: { 
+    nombre: string;
+    categorias?: { nombre: string } | { nombre: string }[]; // <-- CORREGIDO: Cero 'any'
+  };
 }
 
 export default function ReportesCombinadosPage() {
@@ -39,7 +44,7 @@ export default function ReportesCombinadosPage() {
   const [egresosCaja, setEgresosCaja] = useState<Egreso[]>([]); 
 
   // ==========================================
-  // ESTADOS: CIERRE DE DÍA (PRODUCCIÓN E INVENTARIO)
+  // ESTADOS: CIERRE DE DÍA
   // ==========================================
   const hoy = new Date().toISOString().split('T')[0];
   const [fechaFiltro, setFechaFiltro] = useState<string>(hoy);
@@ -47,10 +52,12 @@ export default function ReportesCombinadosPage() {
   const [ventasTarjeta, setVentasTarjeta] = useState(0);
   const [cuentasPendientes, setCuentasPendientes] = useState(0);
   const [totalEgresosCierre, setTotalEgresosCierre] = useState(0);
+  
   const [platillosVendidos, setPlatillosVendidos] = useState<Record<string, number>>({});
+  const [ventasPorCategoria, setVentasPorCategoria] = useState<Record<string, number>>({});
   const [listaEgresosCierre, setListaEgresosCierre] = useState<Egreso[]>([]);
 
-  // Validar Seguridad - CORREGIDO (Evita cascading renders)
+  // Validar Seguridad
   useEffect(() => {
     const verificarAcceso = async () => {
       const userGuardado = localStorage.getItem('usuarioRestaSoft');
@@ -88,9 +95,14 @@ export default function ReportesCombinadosPage() {
 
   // CARGAR DATOS PARA "CIERRE DE DÍA"
   const fetchDatosCierre = useCallback(async () => {
+    if (!fechaFiltro) return; 
+
     const fechaInicio = new Date(`${fechaFiltro}T00:00:00.000Z`);
     const fechaFin = new Date(`${fechaFiltro}T23:59:59.999Z`);
 
+    if (isNaN(fechaInicio.getTime()) || isNaN(fechaFin.getTime())) return;
+
+    // 1. Obtener Pedidos
     const { data: pedidosData } = await supabase
       .from('pedidos')
       .select('*')
@@ -110,6 +122,7 @@ export default function ReportesCombinadosPage() {
     setVentasTarjeta(tarjeta);
     setCuentasPendientes(pendientes);
 
+    // 2. Obtener Egresos
     const { data: egresosData } = await supabase
       .from('egresos')
       .select('*')
@@ -121,21 +134,32 @@ export default function ReportesCombinadosPage() {
     setListaEgresosCierre(egresos);
     setTotalEgresosCierre(egresos.reduce((acc, eg) => acc + eg.monto, 0));
 
+    // 3. Obtener Platillos y sus Categorías
     const { data: itemsData } = await supabase
       .from('pedido_items')
-      .select('cantidad, productos(nombre)')
+      .select('cantidad, productos(nombre, categorias(nombre))') 
       .gte('created_at', fechaInicio.toISOString())
       .lte('created_at', fechaFin.toISOString());
 
     const items = (itemsData || []) as unknown as PedidoItem[];
     const conteoPlatillos: Record<string, number> = {};
+    const conteoCategorias: Record<string, number> = {}; 
     
     items.forEach(item => {
-      const nombre = item.productos?.nombre || 'Desconocido';
-      conteoPlatillos[nombre] = (conteoPlatillos[nombre] || 0) + item.cantidad;
+      const nombrePlatillo = item.productos?.nombre || 'Desconocido';
+      conteoPlatillos[nombrePlatillo] = (conteoPlatillos[nombrePlatillo] || 0) + item.cantidad;
+
+      let nombreCat = 'Sin Categoría';
+      if (item.productos?.categorias) {
+        const cat = Array.isArray(item.productos.categorias) ? item.productos.categorias[0] : item.productos.categorias;
+        if (cat && cat.nombre) nombreCat = cat.nombre;
+      }
+      conteoCategorias[nombreCat] = (conteoCategorias[nombreCat] || 0) + item.cantidad;
     });
 
     setPlatillosVendidos(conteoPlatillos);
+    setVentasPorCategoria(conteoCategorias); 
+
   }, [fechaFiltro]);
 
   // Ejecutar las consultas al montar o cambiar pestaña/filtro
@@ -176,9 +200,7 @@ export default function ReportesCombinadosPage() {
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-20 print:bg-white print:pb-0">
       
-      {/* ========================================== */}
       {/* TICKET DE IMPRESIÓN (SOLO PARA BALANCE DE CAJA) */}
-      {/* ========================================== */}
       {vista === 'caja' && (
         <div id="area-impresion" className="hidden print:flex flex-col p-1 text-black bg-white font-mono text-[9px] leading-tight h-auto">
           <div className="text-center mb-2">
@@ -204,9 +226,7 @@ export default function ReportesCombinadosPage() {
         </div>
       )}
 
-      {/* ========================================== */}
       {/* ENCABEZADO DE IMPRESIÓN (SOLO PARA CIERRE DE DÍA) */}
-      {/* ========================================== */}
       {vista === 'cierre' && (
         <div className="hidden print:block text-center pt-8 pb-4 border-b-2 border-black mb-8">
           <h1 className="text-4xl font-black uppercase italic tracking-tighter">RESTA SOFT</h1>
@@ -216,9 +236,7 @@ export default function ReportesCombinadosPage() {
         </div>
       )}
 
-      {/* ========================================== */}
       {/* HEADER DE LA APLICACIÓN */}
-      {/* ========================================== */}
       <header className="bg-indigo-950 text-white p-8 shadow-2xl print:hidden">
         <div className="max-w-6xl mx-auto flex justify-between items-center">
           <div className="flex items-center gap-4">
@@ -233,7 +251,6 @@ export default function ReportesCombinadosPage() {
           </div>
           
           <div className="flex items-center gap-4">
-            {/* SELECTOR DE VISTAS */}
             <div className="bg-white/10 p-1 rounded-2xl flex gap-1 border border-white/20">
               <button onClick={() => setVista('caja')} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-1 ${vista === 'caja' ? 'bg-orange-600 shadow-md' : 'text-slate-400 hover:text-white'}`}>
                 <Wallet size={14} /> Balance
@@ -408,18 +425,53 @@ export default function ReportesCombinadosPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 print:grid-cols-2 print:gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 print:grid-cols-3 print:gap-4">
             
+            {/* 1. VENTAS POR CATEGORÍA */}
             <div className="bg-white border-2 border-slate-100 rounded-[40px] p-8 shadow-sm print:border-black print:rounded-none print:shadow-none">
               <h2 className="text-lg font-black text-indigo-950 uppercase italic mb-6 flex items-center gap-2 print:text-black">
-                <UtensilsCrossed className="text-orange-500 print:hidden"/> Producción
+                <PieChart className="text-blue-500 print:hidden"/> Categorías
               </h2>
               <div className="max-h-96 overflow-y-auto print:max-h-none">
                 <table className="w-full text-left">
                   <thead>
                     <tr className="border-b-2 border-slate-100 print:border-black">
-                      <th className="pb-3 text-[10px] font-black text-slate-400 uppercase tracking-widest print:text-black">Cantidad</th>
-                      <th className="pb-3 text-[10px] font-black text-slate-400 uppercase tracking-widest print:text-black">Producto Preparado</th>
+                      <th className="pb-3 text-[10px] font-black text-slate-400 uppercase tracking-widest print:text-black">Cant</th>
+                      <th className="pb-3 text-[10px] font-black text-slate-400 uppercase tracking-widest print:text-black">Categoría</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50 print:divide-black/20">
+                    {Object.entries(ventasPorCategoria)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([nombre, cantidad]) => (
+                      <tr key={nombre} className="hover:bg-slate-50 transition-colors">
+                        <td className="py-4">
+                          <span className="bg-blue-50 text-blue-600 px-3 py-1 rounded-xl text-sm font-black print:bg-transparent print:text-black print:border print:border-black">
+                            {cantidad}
+                          </span>
+                        </td>
+                        <td className="py-4 font-black text-indigo-950 uppercase text-xs print:text-black">{nombre}</td>
+                      </tr>
+                    ))}
+                    {Object.keys(ventasPorCategoria).length === 0 && (
+                      <tr><td colSpan={2} className="py-8 text-center text-slate-400 font-bold uppercase text-xs">Sin datos</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* 2. RANKING DE PLATILLOS INDIVIDUALES */}
+            <div className="bg-white border-2 border-slate-100 rounded-[40px] p-8 shadow-sm print:border-black print:rounded-none print:shadow-none">
+              <h2 className="text-lg font-black text-indigo-950 uppercase italic mb-6 flex items-center gap-2 print:text-black">
+                <UtensilsCrossed className="text-orange-500 print:hidden"/> Platillos
+              </h2>
+              <div className="max-h-96 overflow-y-auto print:max-h-none">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b-2 border-slate-100 print:border-black">
+                      <th className="pb-3 text-[10px] font-black text-slate-400 uppercase tracking-widest print:text-black">Cant</th>
+                      <th className="pb-3 text-[10px] font-black text-slate-400 uppercase tracking-widest print:text-black">Producto</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50 print:divide-black/20">
@@ -432,27 +484,28 @@ export default function ReportesCombinadosPage() {
                             {cantidad}
                           </span>
                         </td>
-                        <td className="py-4 font-black text-indigo-950 uppercase text-sm print:text-black">{nombre}</td>
+                        <td className="py-4 font-black text-indigo-950 uppercase text-xs print:text-black">{nombre}</td>
                       </tr>
                     ))}
                     {Object.keys(platillosVendidos).length === 0 && (
-                      <tr><td colSpan={2} className="py-8 text-center text-slate-400 font-bold uppercase text-xs">Sin registros de platillos</td></tr>
+                      <tr><td colSpan={2} className="py-8 text-center text-slate-400 font-bold uppercase text-xs">Sin registros</td></tr>
                     )}
                   </tbody>
                 </table>
               </div>
             </div>
 
+            {/* 3. EGRESOS E INVENTARIO */}
             <div className="bg-white border-2 border-slate-100 rounded-[40px] p-8 shadow-sm print:border-black print:rounded-none print:shadow-none">
               <h2 className="text-lg font-black text-indigo-950 uppercase italic mb-6 flex items-center gap-2 print:text-black">
-                <TrendingDownIcon className="text-red-500 print:hidden"/> Egresos e Inventario
+                <TrendingDownIcon className="text-red-500 print:hidden"/> Egresos
               </h2>
               <div className="max-h-96 overflow-y-auto print:max-h-none">
                 <table className="w-full text-left">
                   <thead>
                     <tr className="border-b-2 border-slate-100 print:border-black">
                       <th className="pb-3 text-[10px] font-black text-slate-400 uppercase tracking-widest print:text-black">Hora</th>
-                      <th className="pb-3 text-[10px] font-black text-slate-400 uppercase tracking-widest print:text-black">Concepto / Merma</th>
+                      <th className="pb-3 text-[10px] font-black text-slate-400 uppercase tracking-widest print:text-black">Concepto</th>
                       <th className="pb-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right print:text-black">Costo</th>
                     </tr>
                   </thead>
@@ -462,16 +515,16 @@ export default function ReportesCombinadosPage() {
                         <td className="py-4 text-[10px] font-bold text-slate-400 uppercase print:text-black">
                           {new Date(egreso.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </td>
-                        <td className="py-4 font-black text-indigo-950 uppercase text-xs print:text-black">
+                        <td className="py-4 font-black text-indigo-950 uppercase text-[10px] print:text-black">
                           {egreso.concepto}
                         </td>
-                        <td className="py-4 text-right font-black text-red-500 print:text-black">
+                        <td className="py-4 text-right font-black text-red-500 text-xs print:text-black">
                           ${egreso.monto.toFixed(2)}
                         </td>
                       </tr>
                     ))}
                     {listaEgresosCierre.length === 0 && (
-                      <tr><td colSpan={3} className="py-8 text-center text-slate-400 font-bold uppercase text-xs">Sin registros de egresos</td></tr>
+                      <tr><td colSpan={3} className="py-8 text-center text-slate-400 font-bold uppercase text-xs">Sin egresos hoy</td></tr>
                     )}
                   </tbody>
                 </table>
