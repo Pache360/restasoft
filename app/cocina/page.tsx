@@ -4,7 +4,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { 
   ChefHat, CheckCircle2, Clock, 
-  ShieldCheck, Check, Loader2, LogOut, ArrowLeft 
+  ShieldCheck, Check, Loader2, LogOut, ArrowLeft, Utensils
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -13,7 +13,20 @@ interface UsuarioLogueado {
   id: string; nombre: string; rol: string;
 }
 
-interface Producto { nombre: string; }
+interface Insumo {
+  nombre: string;
+  unidad_medida: string;
+}
+
+interface Receta {
+  cantidad_requerida: number;
+  insumos: Insumo;
+}
+
+interface Producto { 
+  nombre: string; 
+  recetas?: Receta[];
+}
 
 interface PedidoItem {
   id: string;
@@ -45,7 +58,6 @@ export default function CocinaMonitorPage() {
     const userGuardado = localStorage.getItem('usuarioRestaSoft');
     if (userGuardado) {
       const parsed = JSON.parse(userGuardado);
-      // Solo dejamos entrar a Cocina, Admin, Gerente o Subgerente
       if (['cocina', 'admin', 'gerente', 'subgerente'].includes(parsed.rol)) {
         setUsuarioActivo(parsed);
       }
@@ -78,7 +90,6 @@ export default function CocinaMonitorPage() {
     localStorage.removeItem('usuarioRestaSoft');
   };
 
-  // Teclado físico para el login
   useEffect(() => {
     if (usuarioActivo) return; 
     const manejarTeclado = (e: KeyboardEvent) => {
@@ -92,21 +103,27 @@ export default function CocinaMonitorPage() {
     return () => window.removeEventListener('keydown', manejarTeclado);
   }, [usuarioActivo, pinLogin]);
 
-  // --- LÓGICA DE COCINA (OBTENER PEDIDOS) ---
+  // --- LÓGICA DE COCINA (OBTENER PEDIDOS CON RECETA) ---
   const fetchTickets = useCallback(async () => {
     try {
-      // Pedimos los pedidos que tengan items en estado 'pendiente'
+      // AQUÍ OCURRE LA MAGIA: Traemos el pedido, los items, el producto y SU RECETA DESGLOSADA
       const { data, error } = await supabase
         .from('pedidos')
         .select(`
           id, tipo_servicio, mesero, created_at,
           pedido_items!inner(
             id, cantidad, notas, estado,
-            productos(nombre)
+            productos (
+              nombre,
+              recetas (
+                cantidad_requerida,
+                insumos (nombre, unidad_medida)
+              )
+            )
           )
         `)
         .eq('pedido_items.estado', 'pendiente')
-        .order('id', { ascending: true }); // Ordenamos del más viejo al más nuevo
+        .order('created_at', { ascending: true }); 
 
       if (error) throw error;
       setTickets(data as unknown as TicketCocina[] || []);
@@ -115,22 +132,38 @@ export default function CocinaMonitorPage() {
     }
   }, []);
 
-  // Auto-Refresh cada 5 segundos para que la cocina no tenga que recargar la página
+  // MAGIA INSTANTÁNEA: Supabase Realtime
   useEffect(() => {
     if (!usuarioActivo) return;
     
-    fetchTickets(); // Primera carga
-    const interval = setInterval(fetchTickets, 5000); // Polling cada 5 seg
+    fetchTickets(); 
+
+    const canalCocina = supabase.channel('custom-cocina-channel')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'pedido_items' },
+        () => { fetchTickets(); }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'pedidos' },
+        () => { fetchTickets(); }
+      )
+      .subscribe();
+
+    const intervalFallback = setInterval(fetchTickets, 10000);
     
-    return () => clearInterval(interval);
+    return () => {
+      supabase.removeChannel(canalCocina);
+      clearInterval(intervalFallback);
+    };
   }, [usuarioActivo, fetchTickets]);
 
   const marcarItemComoListo = async (itemId: string) => {
     setProcesandoItemId(itemId);
     try {
-      // Cambiamos el estado a 'entregado' para que desaparezca de la cocina
       await supabase.from('pedido_items').update({ estado: 'entregado' }).eq('id', itemId);
-      await fetchTickets(); // Refrescamos la pantalla
+      await fetchTickets(); 
     } catch (error) {
       console.error(error);
       alert("Error al marcar platillo como listo");
@@ -196,7 +229,7 @@ export default function CocinaMonitorPage() {
 
       <main className="grow p-6 overflow-x-auto">
         {tickets.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-slate-600 opacity-50">
+          <div className="h-full flex flex-col items-center justify-center text-slate-600 opacity-50 animate-in fade-in">
             <CheckCircle2 size={100} className="mb-6" />
             <h2 className="text-3xl font-black uppercase tracking-widest">Cocina Limpia</h2>
             <p className="font-bold">No hay pedidos pendientes en este momento.</p>
@@ -204,7 +237,7 @@ export default function CocinaMonitorPage() {
         ) : (
           <div className="flex gap-6 h-full items-start">
             {tickets.map((ticket, index) => (
-              <div key={ticket.id} className={`min-w-[320px] max-w-[320px] bg-slate-800 rounded-4xl overflow-hidden shadow-2xl border-2 flex flex-col ${index === 0 ? 'border-orange-500 shadow-orange-500/20' : 'border-slate-700'}`}>
+              <div key={ticket.id} className={`min-w-[320px] max-w-[320px] bg-slate-800 rounded-4xl overflow-hidden shadow-2xl border-2 flex flex-col animate-in slide-in-from-right-4 duration-300 ${index === 0 ? 'border-orange-500 shadow-orange-500/20' : 'border-slate-700'}`}>
                 
                 {/* TICKET HEADER */}
                 <div className={`p-5 border-b border-slate-700 ${index === 0 ? 'bg-orange-500/10' : 'bg-slate-900/50'}`}>
@@ -215,8 +248,6 @@ export default function CocinaMonitorPage() {
                     <span className="text-xs font-black text-slate-400">#{ticket.id.split('-')[0].toUpperCase()}</span>
                   </div>
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1"><ShieldCheck size={12}/> Mesero: {ticket.mesero || 'Barra'}</p>
-                  
-                  {/* Calcular tiempo transcurrido (simplificado) */}
                   {ticket.created_at && (
                     <p className="text-[10px] font-bold text-orange-400 uppercase tracking-widest flex items-center gap-1"><Clock size={12}/> {new Date(ticket.created_at).toLocaleTimeString()}</p>
                   )}
@@ -225,7 +256,9 @@ export default function CocinaMonitorPage() {
                 {/* TICKET ITEMS */}
                 <div className="p-5 flex flex-col gap-3 grow overflow-y-auto">
                   {ticket.pedido_items.map(item => (
-                    <div key={item.id} className="bg-slate-900 rounded-2xl p-4 border border-slate-700 flex flex-col gap-3">
+                    <div key={item.id} className="bg-slate-900 rounded-2xl p-4 border border-slate-700 flex flex-col gap-3 transition-all hover:border-slate-500">
+                      
+                      {/* TITULO Y NOTAS */}
                       <div className="flex gap-3 items-start">
                         <div className="w-10 h-10 bg-slate-800 rounded-xl flex items-center justify-center text-lg font-black text-orange-500 border border-slate-600 shrink-0">
                           {item.cantidad}
@@ -233,14 +266,30 @@ export default function CocinaMonitorPage() {
                         <div className="grow">
                           <h3 className="font-black text-sm uppercase text-white leading-tight mb-1">{item.productos?.nombre || 'Producto Desconocido'}</h3>
                           {item.notas && (
-                            <div className="bg-yellow-500/10 border border-yellow-500/20 p-2 rounded-lg inline-block">
+                            <div className="bg-yellow-500/10 border border-yellow-500/20 p-2 rounded-lg inline-block mb-1">
                               <p className="text-[10px] font-black text-yellow-500 uppercase tracking-wider leading-tight">⚠️ {item.notas}</p>
                             </div>
                           )}
                         </div>
                       </div>
+
+                      {/* --- NUEVO: RECETA Y PORCIONES CALCULADAS --- */}
+                      {item.productos?.recetas && item.productos.recetas.length > 0 && (
+                        <div className="mt-1 pl-3 border-l-2 border-slate-700 space-y-1">
+                          <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1 mb-2">
+                            <Utensils size={10} /> Preparación
+                          </p>
+                          {item.productos.recetas.map((r, i) => (
+                            <div key={i} className="flex justify-between items-center text-[10px] font-black text-slate-400 uppercase">
+                              <span>• {r.insumos?.nombre}</span>
+                              <span className="text-emerald-400">
+                                {Number((r.cantidad_requerida * item.cantidad).toFixed(3))} {r.insumos?.unidad_medida}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       
-                      {/* BOTÓN PARA MARCAR LISTO */}
                       <button 
                         disabled={procesandoItemId === item.id}
                         onClick={() => marcarItemComoListo(item.id)}
