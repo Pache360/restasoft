@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { 
-  Camera, QrCode, Grid3x3, 
   ArrowLeft, Loader2, UserCheck, LogOut, ShieldCheck, X, ScanFace
 } from 'lucide-react';
 import Link from 'next/link';
@@ -279,7 +278,7 @@ export default function ChecadorKiosko() {
       ) : (
         <div className="flex flex-col md:flex-row gap-8 w-full max-w-5xl items-center animate-in zoom-in duration-300">
           
-          <div className={`w-full md:w-1/2 bg-black rounded-[48px] overflow-hidden border-4 shadow-2xl relative min-h-[400px] transition-all ${validandoRostro ? 'border-emerald-500 ring-4 ring-emerald-500/50' : 'border-white/10'}`}>
+          <div className={`w-full md:w-1/2 bg-black rounded-[48px] overflow-hidden border-4 shadow-2xl relative min-h-100 transition-all ${validandoRostro ? 'border-emerald-500 ring-4 ring-emerald-500/50' : 'border-white/10'}`}>
              <div id="reader" className="w-full"></div>
              <video ref={videoRef} autoPlay muted className={`w-full h-full object-cover absolute inset-0 -z-10 transition-all ${validandoRostro ? 'grayscale-0' : 'grayscale opacity-50'}`} />
              
