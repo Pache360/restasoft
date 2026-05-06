@@ -2,63 +2,55 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Clock, CheckCircle2, Flame, UtensilsCrossed, Loader2, Check, LogOut, ChefHat, ArrowLeft } from 'lucide-react';
+import { 
+  ChefHat, CheckCircle2, Clock, 
+  ShieldCheck, Check, Loader2, LogOut, ArrowLeft 
+} from 'lucide-react';
 import Link from 'next/link';
 
-// --- INTERFACES ESTRICTAS PARA TYPESCRIPT ---
+// --- INTERFACES ---
 interface UsuarioLogueado {
+  id: string; nombre: string; rol: string;
+}
+
+interface Producto { nombre: string; }
+
+interface PedidoItem {
   id: string;
-  nombre: string;
-  rol: string;
+  cantidad: number;
+  notas: string;
+  estado: string;
+  productos: Producto;
 }
 
-interface RecetaItem {
-  insumos: { nombre: string };
+interface TicketCocina {
+  id: string;
+  tipo_servicio: string;
+  mesero: string;
+  created_at: string;
+  pedido_items: PedidoItem[];
 }
 
-interface PedidoItem { 
-  id: string; 
-  cantidad: number; 
-  notas: string; 
-  estado: string; 
-  productos: { 
-    nombre: string; 
-    categoria: string; 
-    recetas: RecetaItem[]; 
-  }; 
-}
-
-interface Pedido { 
-  id: string; 
-  fecha: string; 
-  total: number; 
-  tipo_servicio: string; 
-  estado: string; 
-  pedido_items: PedidoItem[]; 
-}
-
-export default function CocinaKDS() {
-  // Eliminamos el <any> y usamos nuestra nueva interfaz
+export default function CocinaMonitorPage() {
   const [usuarioActivo, setUsuarioActivo] = useState<UsuarioLogueado | null>(null);
-  const [puedeVolver, setPuedeVolver] = useState(false); 
   const [pinLogin, setPinLogin] = useState("");
   const [errorLogin, setErrorLogin] = useState("");
-
-  const [pedidos, setPedidos] = useState<Pedido[]>([]);
   const [cargando, setCargando] = useState(true);
+  
+  const [tickets, setTickets] = useState<TicketCocina[]>([]);
+  const [procesandoItemId, setProcesandoItemId] = useState<string | null>(null);
 
+  // --- LÓGICA DE LOGIN ---
   useEffect(() => {
     const userGuardado = localStorage.getItem('usuarioRestaSoft');
     if (userGuardado) {
       const parsed = JSON.parse(userGuardado);
-      setUsuarioActivo(parsed);
-      
-      const guardados = localStorage.getItem('roles_permisos_restasoft');
-      const matriz = guardados ? JSON.parse(guardados) : null;
-      if (parsed.rol === 'admin' || (matriz && matriz[parsed.rol]?.caja)) {
-        setPuedeVolver(true);
+      // Solo dejamos entrar a Cocina, Admin, Gerente o Subgerente
+      if (['cocina', 'admin', 'gerente', 'subgerente'].includes(parsed.rol)) {
+        setUsuarioActivo(parsed);
       }
     }
+    setCargando(false);
   }, []);
 
   const handleLogin = async () => {
@@ -66,195 +58,204 @@ export default function CocinaKDS() {
     setCargando(true);
     const { data } = await supabase.from('usuarios').select('*').eq('pin', pinLogin).single();
     
-    const guardados = localStorage.getItem('roles_permisos_restasoft');
-    const matriz = guardados ? JSON.parse(guardados) : null;
-    const tienePermisoCocina = data?.rol === 'admin' || (matriz && matriz[data?.rol]?.cocina);
-
-    if (data && (tienePermisoCocina || ['admin', 'gerente', 'cocina', 'subgerente'].includes(data.rol))) {
+    if (data && ['cocina', 'admin', 'gerente', 'subgerente'].includes(data.rol)) {
       setUsuarioActivo(data);
       localStorage.setItem('usuarioRestaSoft', JSON.stringify(data));
-      
-      if (data.rol === 'admin' || (matriz && matriz[data.rol]?.caja)) {
-        setPuedeVolver(true);
-      } else {
-        setPuedeVolver(false);
-      }
-
       setPinLogin("");
     } else if (data) {
-      setErrorLogin("No tienes permiso de Cocina");
-      setTimeout(() => setErrorLogin(""), 3000);
-      setPinLogin("");
+      setErrorLogin("Acceso denegado: Tu rol no tiene acceso a cocina.");
     } else {
       setErrorLogin("PIN Incorrecto");
-      setTimeout(() => setErrorLogin(""), 3000);
-      setPinLogin("");
     }
+    
+    setTimeout(() => setErrorLogin(""), 3000);
+    setPinLogin("");
     setCargando(false);
   };
 
-  const fetchPedidos = useCallback(async () => {
+  const cerrarSesion = () => {
+    setUsuarioActivo(null);
+    localStorage.removeItem('usuarioRestaSoft');
+  };
+
+  // Teclado físico para el login
+  useEffect(() => {
+    if (usuarioActivo) return; 
+    const manejarTeclado = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement) return;
+      if (e.key >= '0' && e.key <= '9') setPinLogin(p => p.length < 4 ? p + e.key : p);
+      else if (e.key === 'Backspace') setPinLogin(p => p.slice(0, -1));
+      else if (e.key === 'Enter' && pinLogin.length === 4) handleLogin();
+      else if (e.key.toLowerCase() === 'c' || e.key === 'Escape') setPinLogin("");
+    };
+    window.addEventListener('keydown', manejarTeclado);
+    return () => window.removeEventListener('keydown', manejarTeclado);
+  }, [usuarioActivo, pinLogin]);
+
+  // --- LÓGICA DE COCINA (OBTENER PEDIDOS) ---
+  const fetchTickets = useCallback(async () => {
     try {
-      const { data, error } = await supabase.from('pedidos')
+      // Pedimos los pedidos que tengan items en estado 'pendiente'
+      const { data, error } = await supabase
+        .from('pedidos')
         .select(`
-          *, 
-          pedido_items (
-            id, 
-            cantidad, 
-            notas, 
-            estado, 
-            productos (
-              nombre, 
-              categoria,
-              recetas (
-                insumos (nombre)
-              )
-            )
+          id, tipo_servicio, mesero, created_at,
+          pedido_items!inner(
+            id, cantidad, notas, estado,
+            productos(nombre)
           )
         `)
-        .eq('estado', 'pendiente').order('fecha', { ascending: true });
+        .eq('pedido_items.estado', 'pendiente')
+        .order('id', { ascending: true }); // Ordenamos del más viejo al más nuevo
+
       if (error) throw error;
-      
-      // Eliminamos el <any> y usamos PedidoItem
-      const pedidosFiltrados = (data || []).filter(p => p.pedido_items && p.pedido_items.some((item: PedidoItem) => item.estado === 'pendiente'));
-      setPedidos(pedidosFiltrados);
-    } catch (err) {
-      console.error("Error cargando pedidos:", err);
-    } finally {
-      setCargando(false);
+      setTickets(data as unknown as TicketCocina[] || []);
+    } catch (error) {
+      console.error("Error obteniendo tickets:", error);
     }
   }, []);
 
+  // Auto-Refresh cada 5 segundos para que la cocina no tenga que recargar la página
   useEffect(() => {
-    if (!usuarioActivo) {
-       setCargando(false);
-       return;
-    }
-    fetchPedidos();
-    const channel = supabase.channel('cambios-cocina')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'pedidos' }, () => { setTimeout(fetchPedidos, 300); })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'pedido_items' }, () => { setTimeout(fetchPedidos, 300); })
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [fetchPedidos, usuarioActivo]);
+    if (!usuarioActivo) return;
+    
+    fetchTickets(); // Primera carga
+    const interval = setInterval(fetchTickets, 5000); // Polling cada 5 seg
+    
+    return () => clearInterval(interval);
+  }, [usuarioActivo, fetchTickets]);
 
-  const completarPedido = async (id: string) => {
+  const marcarItemComoListo = async (itemId: string) => {
+    setProcesandoItemId(itemId);
     try {
-      await supabase.from('pedidos').update({ estado: 'completado' }).eq('id', id);
-      await supabase.from('pedido_items').update({ estado: 'entregado' }).eq('pedido_id', id);
-      setPedidos(prev => prev.filter(p => p.id !== id));
-    } catch (err) {
-      console.error("Error al completar:", err);
+      // Cambiamos el estado a 'entregado' para que desaparezca de la cocina
+      await supabase.from('pedido_items').update({ estado: 'entregado' }).eq('id', itemId);
+      await fetchTickets(); // Refrescamos la pantalla
+    } catch (error) {
+      console.error(error);
+      alert("Error al marcar platillo como listo");
+    } finally {
+      setProcesandoItemId(null);
     }
   };
 
-  if (!usuarioActivo && !cargando) {
+  // --- RENDERIZADO ---
+  if (cargando && !usuarioActivo) {
+    return <div className="h-screen bg-slate-900 flex items-center justify-center text-white"><Loader2 className="animate-spin mb-4" size={48} /></div>;
+  }
+
+  if (!usuarioActivo) {
     return (
       <div className="h-screen flex flex-col items-center justify-center bg-slate-900 text-white font-sans">
-        <div className="bg-orange-600 p-4 rounded-3xl mb-8 shadow-xl shadow-orange-600/20"><Flame size={48}/></div>
-        <div className="bg-slate-800 p-10 rounded-[48px] shadow-2xl w-full max-w-sm text-center border border-slate-700">
-          <h2 className="text-xl font-bold uppercase mb-2 text-white">Acceso a Cocina</h2>
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-8">Ingresa tu PIN</p>
-          <div className="text-5xl tracking-[0.5em] mb-8 font-black text-white h-14 bg-slate-900 rounded-2xl flex items-center justify-center border-2 border-slate-700">{pinLogin.padEnd(4, '•')}</div>
-          {errorLogin && <p className="text-red-400 font-bold text-sm mb-4 animate-bounce">{errorLogin}</p>}
+        <div className="bg-orange-600 p-4 rounded-3xl mb-8 shadow-xl shadow-orange-600/20"><ChefHat size={48}/></div>
+        <div className="bg-slate-800 p-10 rounded-[48px] text-white shadow-2xl w-full max-w-sm text-center border-4 border-slate-700">
+          <h2 className="text-xl font-bold uppercase mb-2">Monitor de Cocina</h2>
+          <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-8">Ingresa tu PIN con el teclado</p>
+          
+          <div className="text-5xl tracking-[0.5em] mb-8 font-black text-orange-500 h-14 bg-slate-900 rounded-2xl flex items-center justify-center border-2 border-slate-700">
+            {pinLogin.padEnd(4, '•')}
+          </div>
+          {errorLogin && <p className="text-red-500 font-bold text-sm mb-4 animate-bounce">{errorLogin}</p>}
+
           <div className="grid grid-cols-3 gap-3">
             {[1,2,3,4,5,6,7,8,9].map(n => (
-              <button key={n} onClick={() => { if(pinLogin.length < 4) setPinLogin(pinLogin + n) }} className="bg-slate-700 border border-slate-600 p-5 rounded-2xl text-2xl font-black text-white hover:bg-slate-600 transition-all active:scale-95">{n}</button>
+              <button key={n} onClick={() => { if(pinLogin.length < 4) setPinLogin(pinLogin + n) }} className="bg-slate-700 border-2 border-slate-600 p-5 rounded-2xl text-2xl font-black text-white hover:bg-slate-600 hover:border-orange-500 transition-all active:scale-95">{n}</button>
             ))}
-            <button onClick={() => setPinLogin("")} className="bg-red-500/20 border border-red-500/30 text-red-400 p-5 rounded-2xl font-black hover:bg-red-500/30 transition-all active:scale-95">C</button>
-            <button onClick={() => { if(pinLogin.length < 4) setPinLogin(pinLogin + '0') }} className="bg-slate-700 border border-slate-600 p-5 rounded-2xl text-2xl font-black text-white hover:bg-slate-600 transition-all active:scale-95">0</button>
-            <button onClick={handleLogin} className="bg-orange-600 text-white p-5 rounded-2xl font-black hover:bg-orange-500 shadow-lg flex items-center justify-center transition-all active:scale-95"><Check size={32}/></button>
+            <button onClick={() => setPinLogin("")} className="bg-red-500/20 border-2 border-red-500/50 text-red-400 p-5 rounded-2xl font-black hover:bg-red-500/40 transition-all active:scale-95">C</button>
+            <button onClick={() => { if(pinLogin.length < 4) setPinLogin(pinLogin + '0') }} className="bg-slate-700 border-2 border-slate-600 p-5 rounded-2xl text-2xl font-black text-white hover:bg-slate-600 hover:border-orange-500 transition-all active:scale-95">0</button>
+            <button onClick={handleLogin} className="bg-emerald-500 text-white p-5 rounded-2xl font-black hover:bg-emerald-400 shadow-lg flex items-center justify-center transition-all active:scale-95"><Check size={32}/></button>
           </div>
-          <Link href="/" className="mt-8 block text-slate-400 text-[10px] font-black uppercase tracking-widest hover:text-white">Volver al POS</Link>
+          <Link href="/" className="mt-8 block text-slate-500 text-[10px] font-black uppercase tracking-widest hover:text-white">Volver a la Caja</Link>
         </div>
       </div>
     );
   }
 
-  if (cargando) return <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white"><Loader2 className="animate-spin text-orange-500 mb-4" size={48} /></div>;
-
   return (
-    <div className="min-h-screen bg-slate-900 p-8 font-sans">
-      <header className="flex justify-between items-center mb-10">
-        <div className="flex items-center gap-6">
-          <div className="bg-orange-600 p-3 rounded-2xl shadow-lg shadow-orange-900/40"><Flame className="text-white animate-pulse" size={32} /></div>
-          <div>
-            <h1 className="text-4xl font-black text-white tracking-tighter leading-none uppercase">Órdenes <span className="text-orange-500">Cocina</span></h1>
-            <p className="text-slate-400 font-bold uppercase text-[10px] tracking-[0.2em] mt-2">Monitor de Producción Realtime</p>
+    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans flex flex-col">
+      <header className="bg-slate-950 p-6 border-b border-slate-800 flex justify-between items-center shadow-lg">
+        <div className="flex items-center gap-4">
+          <Link href="/" className="p-2 bg-slate-800 rounded-full hover:bg-slate-700 transition-colors"><ArrowLeft size={20} className="text-slate-300"/></Link>
+          <div className="flex items-center gap-3">
+            <div className="bg-orange-600 p-2 rounded-xl"><ChefHat size={24} className="text-white" /></div>
+            <div>
+              <h1 className="text-2xl font-black uppercase tracking-tighter text-white">KDS <span className="text-orange-500 font-light">Cocina</span></h1>
+              <p className="text-[10px] uppercase font-bold tracking-widest text-emerald-400 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Sistema en Vivo</p>
+            </div>
           </div>
         </div>
         
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-3 bg-slate-800/80 px-5 py-3 rounded-2xl border border-slate-700 shadow-inner">
-             <ChefHat size={24} className="text-orange-500" />
-             <div className="flex flex-col text-left mr-2">
-               <span className="text-[9px] text-slate-400 font-black uppercase tracking-widest">Chef a Cargo</span>
-               <span className="text-base text-white font-black uppercase leading-tight">{usuarioActivo?.nombre}</span>
-             </div>
+        <div className="flex items-center gap-6">
+          <div className="text-right">
+            <p className="text-[10px] uppercase font-bold text-slate-500 tracking-widest">En Turno</p>
+            <p className="text-sm font-black uppercase text-white">{usuarioActivo.nombre}</p>
           </div>
-
-          {puedeVolver && (
-            <Link href="/" className="flex items-center gap-2 bg-indigo-950 px-5 py-4 rounded-2xl text-white hover:bg-indigo-800 transition-all border border-indigo-900 font-black uppercase text-xs tracking-widest group shadow-md">
-              <ArrowLeft size={20} className="group-hover:-translate-x-1 transition-transform" /> Volver a Caja
-            </Link>
-          )}
-
-          <button onClick={() => { setUsuarioActivo(null); setPuedeVolver(false); localStorage.removeItem('usuarioRestaSoft'); }} className="flex items-center gap-2 bg-slate-800 px-5 py-4 rounded-2xl text-slate-400 hover:text-white hover:bg-red-500 transition-all border border-slate-700 font-black uppercase text-xs tracking-widest group shadow-md">
-            <LogOut size={20} className="group-hover:-translate-x-1 transition-transform" /> Salir
-          </button>
+          <button onClick={cerrarSesion} className="bg-slate-800 p-3 rounded-2xl text-red-400 hover:bg-red-500/20 hover:text-red-400 transition-all"><LogOut size={20}/></button>
         </div>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-        {pedidos.map((pedido) => (
-          <div key={pedido.id} className="bg-white rounded-4xl overflow-hidden shadow-2xl flex flex-col border-t-8 border-orange-500 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="p-6 border-b border-slate-100 bg-slate-50/50">
-              <div className="flex justify-between items-start mb-2">
-                <span className="bg-indigo-950 text-white px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest">#{pedido.id.slice(0, 4)}</span>
-                <span className="flex items-center gap-1 text-slate-400 text-xs font-bold"><Clock size={14} />{new Date(pedido.fecha).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-              </div>
-              <h2 className="text-2xl font-black text-indigo-950 uppercase italic tracking-tighter">{pedido.tipo_servicio}</h2>
-            </div>
-            
-            <div className="p-6 grow space-y-5">
-              {/* Eliminamos el <any> y usamos PedidoItem */}
-              {pedido.pedido_items.filter((item: PedidoItem) => item.estado === 'pendiente').map((item) => (
-                <div key={item.id} className="border-l-4 border-orange-500 pl-4 py-1 bg-slate-50/50 rounded-r-xl">
-                  <div className="flex items-start gap-3">
-                    <span className="text-2xl font-black text-orange-600 leading-none">{item.cantidad}x</span>
-                    <div className="flex flex-col">
-                      <span className="text-lg font-black text-indigo-950 uppercase leading-none tracking-tight">{item.productos?.nombre || "Producto"}</span>
-                      {item.productos?.recetas && item.productos.recetas.length > 0 && (
-                        <p className="text-[10px] text-slate-500 font-bold uppercase mt-2 leading-tight">
-                          <span className="text-slate-400 mr-1">Ingredientes:</span> 
-                          {/* Eliminamos el <any> y usamos RecetaItem */}
-                          {item.productos.recetas.map((r: RecetaItem) => r.insumos?.nombre).filter(Boolean).join(', ')}
-                        </p>
-                      )}
-                    </div>
+      <main className="grow p-6 overflow-x-auto">
+        {tickets.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center text-slate-600 opacity-50">
+            <CheckCircle2 size={100} className="mb-6" />
+            <h2 className="text-3xl font-black uppercase tracking-widest">Cocina Limpia</h2>
+            <p className="font-bold">No hay pedidos pendientes en este momento.</p>
+          </div>
+        ) : (
+          <div className="flex gap-6 h-full items-start">
+            {tickets.map((ticket, index) => (
+              <div key={ticket.id} className={`min-w-[320px] max-w-[320px] bg-slate-800 rounded-4xl overflow-hidden shadow-2xl border-2 flex flex-col ${index === 0 ? 'border-orange-500 shadow-orange-500/20' : 'border-slate-700'}`}>
+                
+                {/* TICKET HEADER */}
+                <div className={`p-5 border-b border-slate-700 ${index === 0 ? 'bg-orange-500/10' : 'bg-slate-900/50'}`}>
+                  <div className="flex justify-between items-start mb-3">
+                    <span className="bg-slate-950 text-white px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border border-slate-700 shadow-inner">
+                      {ticket.tipo_servicio}
+                    </span>
+                    <span className="text-xs font-black text-slate-400">#{ticket.id.split('-')[0].toUpperCase()}</span>
                   </div>
-                  {item.notas && (
-                    <div className="mt-3 bg-amber-100/50 p-3 rounded-xl border border-amber-200 flex items-start gap-2">
-                      <p className="text-[11px] text-amber-900 font-black italic uppercase leading-tight">⚠️ {item.notas}</p>
-                    </div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1"><ShieldCheck size={12}/> Mesero: {ticket.mesero || 'Barra'}</p>
+                  
+                  {/* Calcular tiempo transcurrido (simplificado) */}
+                  {ticket.created_at && (
+                    <p className="text-[10px] font-bold text-orange-400 uppercase tracking-widest flex items-center gap-1"><Clock size={12}/> {new Date(ticket.created_at).toLocaleTimeString()}</p>
                   )}
                 </div>
-              ))}
-            </div>
 
-            <button onClick={() => completarPedido(pedido.id)} className="m-6 bg-emerald-500 hover:bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg shadow-emerald-900/20 flex items-center justify-center gap-2 transition-all active:scale-95 group">
-              <CheckCircle2 size={24} className="group-hover:scale-110 transition-transform" /> DESPACHAR ORDEN
-            </button>
-          </div>
-        ))}
-
-        {pedidos.length === 0 && (
-          <div className="col-span-full h-80 flex flex-col items-center justify-center text-slate-700 border-2 border-dashed border-slate-800 rounded-[40px]">
-            <UtensilsCrossed size={60} className="opacity-10 mb-4" />
-            <p className="font-black text-lg uppercase tracking-widest opacity-20 italic">Todo en orden, Chef</p>
+                {/* TICKET ITEMS */}
+                <div className="p-5 flex flex-col gap-3 grow overflow-y-auto">
+                  {ticket.pedido_items.map(item => (
+                    <div key={item.id} className="bg-slate-900 rounded-2xl p-4 border border-slate-700 flex flex-col gap-3">
+                      <div className="flex gap-3 items-start">
+                        <div className="w-10 h-10 bg-slate-800 rounded-xl flex items-center justify-center text-lg font-black text-orange-500 border border-slate-600 shrink-0">
+                          {item.cantidad}
+                        </div>
+                        <div className="grow">
+                          <h3 className="font-black text-sm uppercase text-white leading-tight mb-1">{item.productos?.nombre || 'Producto Desconocido'}</h3>
+                          {item.notas && (
+                            <div className="bg-yellow-500/10 border border-yellow-500/20 p-2 rounded-lg inline-block">
+                              <p className="text-[10px] font-black text-yellow-500 uppercase tracking-wider leading-tight">⚠️ {item.notas}</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      
+                      {/* BOTÓN PARA MARCAR LISTO */}
+                      <button 
+                        disabled={procesandoItemId === item.id}
+                        onClick={() => marcarItemComoListo(item.id)}
+                        className="w-full mt-2 bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white border border-emerald-500/50 py-3 rounded-xl flex items-center justify-center gap-2 font-black uppercase text-[10px] tracking-widest transition-all disabled:opacity-50"
+                      >
+                        {procesandoItemId === item.id ? <Loader2 size={16} className="animate-spin" /> : <><CheckCircle2 size={16} /> Listo</>}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         )}
-      </div>
+      </main>
     </div>
   );
 }
