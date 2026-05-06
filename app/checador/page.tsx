@@ -1,13 +1,31 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { 
-  Camera, QrCode, Keypad, CheckCircle2, 
-  Clock, ArrowLeft, Loader2, UserCheck, LogOut, ShieldCheck 
+  Camera, QrCode, Grid3x3, 
+  ArrowLeft, Loader2, UserCheck, LogOut, ShieldCheck, X
 } from 'lucide-react';
 import Link from 'next/link';
 import { Html5QrcodeScanner } from 'html5-qrcode';
+
+// Definición de tipos para Supabase
+interface Turno {
+  id: string;
+  nombre: string;
+  hora_entrada: string;
+  hora_salida: string;
+  tolerancia_minutos: number;
+}
+
+interface Usuario {
+  id: string;
+  nombre: string;
+  pin: string;
+  qr_codigo?: string;
+  turno_id?: string;
+  turnos?: Turno;
+}
 
 export default function ChecadorKiosko() {
   const [hora, setHora] = useState(new Date());
@@ -25,48 +43,7 @@ export default function ChecadorKiosko() {
     return () => clearInterval(timer);
   }, []);
 
-  // Soporte para teclado físico
-  useEffect(() => {
-    const manejarTeclado = (e: KeyboardEvent) => {
-      if (e.key >= '0' && e.key <= '9') {
-        if (pin.length < 4) setPin(prev => prev + e.key);
-      } else if (e.key === 'Backspace') {
-        setPin(prev => prev.slice(0, -1));
-      } else if (e.key === 'Enter' && pin.length === 4) {
-        procesarRegistro('pin');
-      } else if (e.key === 'Escape') {
-        setPin("");
-        setTipoRegistro(null);
-      }
-    };
-    window.addEventListener('keydown', manejarTeclado);
-    return () => window.removeEventListener('keydown', manejarTeclado);
-  }, [pin, tipoRegistro]);
-
-  // Inicializar Escáner QR
-  useEffect(() => {
-    if (tipoRegistro) {
-      const scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250 }, false);
-      scanner.render((decodedText) => {
-        scanner.clear();
-        procesarRegistro('qr', decodedText);
-      }, (error) => { /* ignore */ });
-      return () => { scanner.clear(); };
-    }
-  }, [tipoRegistro]);
-
-  // Encender cámara para foto de seguridad
-  useEffect(() => {
-    async function setupCamera() {
-      if (videoRef.current) {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        videoRef.current.srcObject = stream;
-      }
-    }
-    setupCamera();
-  }, []);
-
-  const capturarFotoBase64 = () => {
+  const capturarFotoBase64 = useCallback(() => {
     if (videoRef.current && canvasRef.current) {
       const context = canvasRef.current.getContext('2d');
       canvasRef.current.width = videoRef.current.videoWidth;
@@ -75,23 +52,32 @@ export default function ChecadorKiosko() {
       return canvasRef.current.toDataURL('image/jpeg', 0.5);
     }
     return null;
-  };
+  }, []);
 
-  const procesarRegistro = async (metodo: 'pin' | 'qr' | 'huella', valorQR?: string) => {
+  const procesarRegistro = useCallback(async (metodo: 'pin' | 'qr' | 'huella', valorQR?: string) => {
     if (!tipoRegistro) return alert("Selecciona primero ENTRADA o SALIDA");
     
     setCargando(true);
     try {
-      // 1. Identificar al usuario
-      let query = supabase.from('usuarios').select('*, turnos(*)');
-      if (metodo === 'pin') query = query.eq('pin', pin).single();
-      if (metodo === 'qr') query = query.eq('qr_codigo', valorQR).single();
+      let data = null;
+      let userError = null;
 
-      const { data: usuario, error: userError } = await query;
+      // 1. Identificar al usuario (TS Fix: Separar las consultas para no romper el tipado)
+      if (metodo === 'pin') {
+        const res = await supabase.from('usuarios').select('*, turnos(*)').eq('pin', pin).single();
+        data = res.data;
+        userError = res.error;
+      } else if (metodo === 'qr' && valorQR) {
+        const res = await supabase.from('usuarios').select('*, turnos(*)').eq('qr_codigo', valorQR).single();
+        data = res.data;
+        userError = res.error;
+      }
+
+      const usuario = data as unknown as Usuario;
 
       if (userError || !usuario) throw new Error("Usuario no encontrado");
 
-      // 2. Capturar foto si es por PIN (seguridad extra)
+      // 2. Capturar foto si es por PIN
       const foto = metodo === 'pin' ? capturarFotoBase64() : null;
 
       // 3. Validar puntualidad (si es entrada)
@@ -110,7 +96,7 @@ export default function ChecadorKiosko() {
         usuario_id: usuario.id,
         tipo_registro: tipoRegistro,
         metodo: metodo,
-        foto_url: foto, // Aquí guardamos el base64 directo para simplificar (o puedes usar Storage)
+        foto_url: foto,
         estatus_puntualidad: estatus
       }]);
 
@@ -126,13 +112,83 @@ export default function ChecadorKiosko() {
       setTipoRegistro(null);
       setTimeout(() => setMensaje({ texto: '', tipo: '' }), 5000);
 
-    } catch (err: any) {
-      setMensaje({ texto: err.message, tipo: 'error' });
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setMensaje({ texto: err.message, tipo: 'error' });
+      } else {
+        setMensaje({ texto: 'Error desconocido', tipo: 'error' });
+      }
       setPin("");
     } finally {
       setCargando(false);
     }
-  };
+  }, [pin, tipoRegistro, capturarFotoBase64]);
+
+  // Soporte para teclado físico
+  useEffect(() => {
+    const manejarTeclado = (e: KeyboardEvent) => {
+      if (e.key >= '0' && e.key <= '9') {
+        if (pin.length < 4) setPin(prev => prev + e.key);
+      } else if (e.key === 'Backspace') {
+        setPin(prev => prev.slice(0, -1));
+      } else if (e.key === 'Enter' && pin.length === 4) {
+        procesarRegistro('pin');
+      } else if (e.key === 'Escape') {
+        setPin("");
+        setTipoRegistro(null);
+      }
+    };
+    window.addEventListener('keydown', manejarTeclado);
+    return () => window.removeEventListener('keydown', manejarTeclado);
+  }, [pin, tipoRegistro, procesarRegistro]);
+
+  // Inicializar Escáner QR
+  useEffect(() => {
+    let scanner: Html5QrcodeScanner | null = null;
+    
+    if (tipoRegistro) {
+      scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250 }, false);
+      scanner.render((decodedText) => {
+        if (scanner) {
+          scanner.clear();
+          procesarRegistro('qr', decodedText);
+        }
+      }, () => { /* ignore error callback */ });
+    }
+    
+    return () => { 
+      if (scanner) {
+        scanner.clear().catch(console.error);
+      }
+    };
+  }, [tipoRegistro, procesarRegistro]);
+
+  // Encender cámara
+  useEffect(() => {
+    // ESLint Fix: Guardar la referencia en una constante local para el cleanup
+    const currentVideo = videoRef.current; 
+    
+    async function setupCamera() {
+      if (currentVideo) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          currentVideo.srcObject = stream;
+        } catch (error) {
+          console.error("Error al acceder a la cámara", error);
+        }
+      }
+    }
+    setupCamera();
+    
+    // Cleanup de la cámara al desmontar
+    return () => {
+      if (currentVideo && currentVideo.srcObject) {
+        const stream = currentVideo.srcObject as MediaStream;
+        stream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
+
 
   return (
     <div className="min-h-screen bg-indigo-950 text-white font-sans flex flex-col items-center justify-center p-6">
@@ -173,9 +229,9 @@ export default function ChecadorKiosko() {
         <div className="flex flex-col md:flex-row gap-8 w-full max-w-5xl items-center animate-in zoom-in duration-300">
           
           {/* Lado Izquierdo: Cámara/QR */}
-          <div className="w-full md:w-1/2 bg-black rounded-[48px] overflow-hidden border-4 border-white/10 shadow-2xl relative min-h-[400px]">
+          <div className="w-full md:w-1/2 bg-black rounded-[48px] overflow-hidden border-4 border-white/10 shadow-2xl relative min-h-100">
              <div id="reader" className="w-full"></div>
-             <video ref={videoRef} autoPlay className="w-full h-full object-cover grayscale opacity-50" />
+             <video ref={videoRef} autoPlay muted className="w-full h-full object-cover grayscale opacity-50 absolute inset-0 -z-10" />
              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                 <div className="border-2 border-orange-500 w-64 h-64 rounded-3xl border-dashed animate-pulse" />
              </div>
@@ -195,7 +251,7 @@ export default function ChecadorKiosko() {
 
             <div className="grid grid-cols-3 gap-3">
               {[1,2,3,4,5,6,7,8,9].map(n => (
-                <button key={n} onClick={() => { if(pin.length < 4) setPin(pin + n) }} className="bg-slate-50 border-2 border-slate-100 p-5 rounded-2xl text-2xl font-black hover:bg-orange-50 hover:border-orange-500 transition-all active:scale-95">{n}</button>
+                <button key={n} onClick={() => { if(pin.length < 4) setPin(pin + n.toString()) }} className="bg-slate-50 border-2 border-slate-100 p-5 rounded-2xl text-2xl font-black hover:bg-orange-50 hover:border-orange-500 transition-all active:scale-95">{n}</button>
               ))}
               <button onClick={() => setPin("")} className="bg-red-50 text-red-500 p-5 rounded-2xl font-black hover:bg-red-100">C</button>
               <button onClick={() => { if(pin.length < 4) setPin(pin + '0') }} className="bg-slate-50 border-2 border-slate-100 p-5 rounded-2xl text-2xl font-black hover:bg-orange-50 transition-all">0</button>
@@ -209,7 +265,7 @@ export default function ChecadorKiosko() {
       )}
 
       <footer className="mt-12 flex gap-8 opacity-30">
-        <div className="flex items-center gap-2"><Keypad size={16}/> <span>PIN</span></div>
+        <div className="flex items-center gap-2"><Grid3x3 size={16}/> <span>PIN</span></div>
         <div className="flex items-center gap-2"><QrCode size={16}/> <span>QR</span></div>
         <div className="flex items-center gap-2"><Camera size={16}/> <span>FOTO SEGURIDAD</span></div>
       </footer>

@@ -10,7 +10,6 @@ import Link from 'next/link';
 
 interface ModificadorBase { id: string; nombre: string; }
 interface Producto { id: string; nombre: string; modificadores?: ModificadorBase[]; }
-// Agregamos es_preparado a la interfaz
 interface Insumo { id: string; nombre: string; unidad_medida: string; categoria_id?: string; es_preparado?: boolean; }
 interface RecetaItem { 
   id: string; 
@@ -44,7 +43,6 @@ export default function RecetasPage() {
 
   const cargarDatosIniciales = useCallback(async () => {
     const { data: p } = await supabase.from('productos').select('id, nombre, modificadores').order('nombre');
-    // Traemos también la columna es_preparado
     const { data: i } = await supabase.from('insumos').select('id, nombre, unidad_medida, categoria_id, es_preparado').order('nombre');
     const { data: c } = await supabase.from('categorias_insumos').select('id, nombre');
     
@@ -66,15 +64,14 @@ export default function RecetasPage() {
     setCargando(false);
   }, []);
 
+  // --- FIX: Forma correcta de llamar la función en el Effect ---
   useEffect(() => {
-    let montado = true;
-    if (montado) {
-      cargarDatosIniciales();
-    }
-    return () => { montado = false; };
+    const initData = async () => {
+      await cargarDatosIniciales();
+    };
+    initData();
   }, [cargarDatosIniciales]);
 
-  // LÓGICA DE CREACIÓN: AHORA SÍ MANDA EL ES_PREPARADO A SUPABASE
   const crearElementoPrincipal = async () => {
     if (!nombreNuevo) return;
     
@@ -89,7 +86,7 @@ export default function RecetasPage() {
     }
     
     if (modo === 'preparados') {
-      payload.es_preparado = true; // <--- LA MAGIA ESTÁ AQUÍ
+      payload.es_preparado = true; 
       payload.categoria_id = idCategoriaPreparados || null; 
     }
 
@@ -205,7 +202,6 @@ export default function RecetasPage() {
             <button onClick={() => setModalNuevo(true)} className="bg-orange-600 text-white p-1 rounded-lg hover:scale-110 transition-all"><Plus size={16}/></button>
           </div>
           <div className="bg-white rounded-4xl border-2 border-slate-100 p-4 shadow-sm max-h-150 overflow-y-auto">
-            {/* FITRO ACTUALIZADO: Si estamos en modo preparados, muestra los que tienen es_preparado = true */}
             {(modo === 'productos' ? productos : modo === 'modificadores' ? modificadores : insumos.filter(ins => ins.es_preparado)).map(item => (
               <div key={item.id} className="relative group">
                 <button onClick={() => cargarReceta(item.id)} className={`w-full text-left p-4 pr-12 rounded-2xl mb-2 font-bold transition-all ${seleccionadoId === item.id ? 'bg-orange-500 text-white shadow-lg' : 'hover:bg-slate-50 text-indigo-950'}`}>{item.nombre}</button>
@@ -258,7 +254,6 @@ export default function RecetasPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <select className="bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950" value={nuevoIngrediente.insumo_id} onChange={e => setNuevoIngrediente({...nuevoIngrediente, insumo_id: e.target.value})}>
                     <option value="">Seleccionar Insumo...</option>
-                    {/* Filtra para no poder agregarse a sí mismo como ingrediente */}
                     {insumos.filter(i => i.id !== seleccionadoId).map(i => <option key={i.id} value={i.id}>{i.nombre} ({i.unidad_medida})</option>)}
                   </select>
                   <div className="flex gap-2">
