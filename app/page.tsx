@@ -7,7 +7,8 @@ import {
   ShoppingCart, Trash2, Plus, Minus, Pizza, Utensils, 
   ChefHat, Settings, Clock, ChevronRight, Flame, X, Check, Loader2,
   Printer, DollarSign, CreditCard, BarChart3, ScrollText,
-  BookOpen, Package, Monitor, Users as UsersIcon, ClipboardList, Coffee, LogOut
+  BookOpen, Package, Monitor, Users as UsersIcon, ClipboardList, Coffee, LogOut,
+  Banknote, Coins // Íconos nuevos
 } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -72,8 +73,16 @@ export default function RestaSoftPOS() {
   const [cuentaAbiertaId, setCuentaAbiertaId] = useState<string | null>(null); 
   
   const [mostrarModalMesa, setMostrarModalMesa] = useState(false);
+  
+  // PAGOS Y CAMBIO
   const [mostrarModalPago, setMostrarModalPago] = useState(false);
   const [metodoPago, setMetodoPago] = useState<'efectivo' | 'tarjeta'>('efectivo');
+  const [montoRecibido, setMontoRecibido] = useState<string>("");
+
+  // FONDO DE CAJA
+  const [fondoCaja, setFondoCaja] = useState<number>(0);
+  const [mostrarModalFondo, setMostrarModalFondo] = useState(false);
+  const [inputFondo, setInputFondo] = useState<string>("");
 
   const [mostrarModalCuentas, setMostrarModalCuentas] = useState(false);
   const [cuentasAbiertas, setCuentasAbiertas] = useState<CuentaAbierta[]>([]);
@@ -87,11 +96,15 @@ export default function RestaSoftPOS() {
     nombre: "RESTA SOFT", dir: "Sucursal Principal", tel: "", facturacion: "", msg: "¡Gracias por su preferencia!", logo: "" 
   });
 
+  const subtotal = carrito.reduce((acc, item) => acc + (item.precio * item.cantidad), 0);
+
   useEffect(() => {
     setIsClient(true);
     
     const inicializarPOS = async () => {
       const userGuardado = localStorage.getItem('usuarioRestaSoft');
+      const fondoGuardado = localStorage.getItem('fondoCaja_restasoft');
+      if (fondoGuardado) setFondoCaja(Number(fondoGuardado));
       
       if (userGuardado) {
         const parsed = JSON.parse(userGuardado);
@@ -134,9 +147,9 @@ export default function RestaSoftPOS() {
     inicializarPOS();
   }, [router]);
 
-  // --- NUEVO: SOPORTE PARA TECLADO FÍSICO EN EL LOGIN ---
+  // SOPORTE PARA TECLADO FÍSICO EN EL LOGIN
   useEffect(() => {
-    if (usuarioActivo) return; // Solo escuchar si estamos en la pantalla de login
+    if (usuarioActivo) return; 
 
     const manejarTeclado = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -146,7 +159,6 @@ export default function RestaSoftPOS() {
       } else if (e.key === 'Backspace') {
         setPinLogin(prev => prev.slice(0, -1));
       } else if (e.key === 'Enter') {
-        // Simulamos un clic en el botón de Enter para usar el PIN actual
         document.getElementById('btn-login-principal')?.click();
       } else if (e.key.toLowerCase() === 'c' || e.key === 'Escape') {
         setPinLogin("");
@@ -192,6 +204,14 @@ export default function RestaSoftPOS() {
 
   const ejecutarImpresion = () => { window.print(); };
 
+  const guardarFondoCaja = () => {
+    const val = Number(inputFondo);
+    setFondoCaja(val);
+    localStorage.setItem('fondoCaja_restasoft', val.toString());
+    setMostrarModalFondo(false);
+    setInputFondo("");
+  };
+
   const cargarCuentasAbiertas = async () => {
     let query = supabase.from('pedidos').select('*, pedido_items(*)').eq('metodo_pago', 'por_cobrar');
     if (usuarioActivo?.rol === 'mesero') {
@@ -203,6 +223,15 @@ export default function RestaSoftPOS() {
 
   const finalizarPedido = async (esCuentaAbierta: boolean = false) => {
     if (carrito.length === 0) return;
+    
+    // Validación de cobro
+    if (!esCuentaAbierta && metodoPago === 'efectivo') {
+      const recibido = Number(montoRecibido) || 0;
+      if (recibido < subtotal && recibido !== 0) {
+        return alert("El monto recibido es menor al total a pagar.");
+      }
+    }
+
     try {
       const totalVenta = carrito.reduce((acc, item) => acc + (item.precio * item.cantidad), 0);
       const servicioFinal = tipoOrden === 'comedor' ? `COMEDOR - MESA ${numMesa}` : tipoOrden.toUpperCase();
@@ -248,6 +277,7 @@ export default function RestaSoftPOS() {
       setCarrito([]);
       setMostrarModalPago(false);
       setCuentaAbiertaId(null);
+      setMontoRecibido(""); // Limpiar calculadora de cambio
     } catch (err: unknown) {
       if (err instanceof Error) alert("Error al procesar: " + err.message);
     }
@@ -302,7 +332,6 @@ export default function RestaSoftPOS() {
     });
   };
 
-  const subtotal = carrito.reduce((acc, item) => acc + (item.precio * item.cantidad), 0);
 
   if (cargando && !usuarioActivo) return <div className="h-screen bg-indigo-950 flex items-center justify-center text-white"><Loader2 className="animate-spin mb-4" size={48} /></div>;
 
@@ -369,13 +398,21 @@ export default function RestaSoftPOS() {
         <div className="border-b border-dashed border-black my-2"></div>
         <div className="flex justify-between font-black text-xs"><span>TOTAL:</span><span>${subtotal.toFixed(2)}</span></div>
         
+        {/* Desglose de pago en ticket si es efectivo */}
+        {metodoPago === 'efectivo' && Number(montoRecibido) > 0 && (
+          <div className="mt-1 space-y-1 text-[8px] text-gray-600 font-bold">
+            <div className="flex justify-between"><span>RECIBIDO:</span><span>${Number(montoRecibido).toFixed(2)}</span></div>
+            <div className="flex justify-between"><span>CAMBIO:</span><span>${(Number(montoRecibido) - subtotal).toFixed(2)}</span></div>
+          </div>
+        )}
+        
         <div className="mt-3 pt-2 text-center border-t border-dashed border-black text-[7px] space-y-1">
           {ticketConfig.facturacion && <p className="uppercase">{ticketConfig.facturacion}</p>}
           <p className="uppercase italic font-black">{ticketConfig.msg}</p>
         </div>
       </div>
 
-      <nav className="w-24 bg-indigo-950 flex flex-col items-center py-6 justify-between border-r border-indigo-900 print:hidden overflow-y-auto">
+      <nav className="w-24 bg-indigo-950 flex flex-col items-center py-6 justify-between border-r border-indigo-900 print:hidden overflow-y-auto shrink-0">
         <div className="space-y-4 flex flex-col items-center w-full">
           <div className="bg-orange-500 p-3 rounded-2xl shadow-lg shadow-orange-500/30 mb-4">
             <Flame className="text-white" size={30} />
@@ -429,22 +466,35 @@ export default function RestaSoftPOS() {
               ))}
             </div>
           </div>
+          
+          {/* HEADER DERECHO: Fondo de Caja + Reloj */}
           <div className="flex items-center gap-4">
-            <div className="flex flex-col text-right">
+            
+            {/* BOTÓN FONDO DE CAJA */}
+            <button 
+              onClick={() => { setInputFondo(fondoCaja > 0 ? fondoCaja.toString() : ""); setMostrarModalFondo(true); }}
+              className="bg-emerald-50 text-emerald-600 hover:bg-emerald-100 px-4 py-3 rounded-2xl shadow-sm border border-emerald-200 flex flex-col items-center justify-center transition-all"
+            >
+              <span className="text-[8px] font-black uppercase tracking-widest text-emerald-500 mb-0.5">Fondo Inicial</span>
+              <span className="text-sm font-black flex items-center gap-1"><Coins size={14}/> ${fondoCaja.toFixed(2)}</span>
+            </button>
+
+            <div className="flex flex-col text-right border-l border-slate-200 pl-4">
                <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Usuario</span>
                <span className="text-sm font-black text-indigo-950 uppercase">{usuarioActivo.nombre}</span>
             </div>
+            
             <div className="bg-white px-5 py-3 rounded-2xl shadow-sm border border-slate-200 text-indigo-950 font-black flex items-center gap-3 text-lg"><Clock size={20} className="text-orange-500" />
               {isClient ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '00:00'}
             </div>
           </div>
         </header>
 
-        <div className="flex gap-3 mb-6 overflow-x-auto pb-2">
-          <button onClick={() => setCategoriaActiva('todas')} className={`px-5 py-3 rounded-2xl font-black text-xs uppercase flex items-center gap-2 transition-all ${categoriaActiva === 'todas' ? 'bg-orange-500 text-white shadow-lg' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-100'}`}><ChefHat size={16}/> Todo</button>
-          <button onClick={() => setCategoriaActiva('pizzas')} className={`px-5 py-3 rounded-2xl font-black text-xs uppercase flex items-center gap-2 transition-all ${categoriaActiva === 'pizzas' ? 'bg-orange-500 text-white shadow-lg' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-100'}`}><Pizza size={16}/> Pizzas</button>
-          <button onClick={() => setCategoriaActiva('burgers')} className={`px-5 py-3 rounded-2xl font-black text-xs uppercase flex items-center gap-2 transition-all ${categoriaActiva === 'burgers' ? 'bg-orange-500 text-white shadow-lg' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-100'}`}><Utensils size={16}/> Hamburguesas</button>
-          <button onClick={() => setCategoriaActiva('bebidas')} className={`px-5 py-3 rounded-2xl font-black text-xs uppercase flex items-center gap-2 transition-all ${categoriaActiva === 'bebidas' ? 'bg-orange-500 text-white shadow-lg' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-100'}`}><Coffee size={16}/> Bebidas</button>
+        <div className="flex gap-3 mb-6 overflow-x-auto pb-2 shrink-0">
+          <button onClick={() => setCategoriaActiva('todas')} className={`px-5 py-3 rounded-2xl font-black text-xs uppercase flex items-center gap-2 transition-all shrink-0 ${categoriaActiva === 'todas' ? 'bg-orange-500 text-white shadow-lg' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-100'}`}><ChefHat size={16}/> Todo</button>
+          <button onClick={() => setCategoriaActiva('pizzas')} className={`px-5 py-3 rounded-2xl font-black text-xs uppercase flex items-center gap-2 transition-all shrink-0 ${categoriaActiva === 'pizzas' ? 'bg-orange-500 text-white shadow-lg' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-100'}`}><Pizza size={16}/> Pizzas</button>
+          <button onClick={() => setCategoriaActiva('burgers')} className={`px-5 py-3 rounded-2xl font-black text-xs uppercase flex items-center gap-2 transition-all shrink-0 ${categoriaActiva === 'burgers' ? 'bg-orange-500 text-white shadow-lg' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-100'}`}><Utensils size={16}/> Hamburguesas</button>
+          <button onClick={() => setCategoriaActiva('bebidas')} className={`px-5 py-3 rounded-2xl font-black text-xs uppercase flex items-center gap-2 transition-all shrink-0 ${categoriaActiva === 'bebidas' ? 'bg-orange-500 text-white shadow-lg' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-100'}`}><Coffee size={16}/> Bebidas</button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 overflow-y-auto pr-2 pb-10">
@@ -457,13 +507,13 @@ export default function RestaSoftPOS() {
         </div>
       </main>
 
-      <aside className="w-105 bg-white border-l border-slate-200 flex flex-col shadow-2xl print:hidden relative z-10">
+      <aside className="w-105 bg-white border-l border-slate-200 flex flex-col shadow-2xl print:hidden relative z-10 shrink-0">
         <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
           <h2 className="font-black text-xl text-indigo-950 flex items-center gap-2 uppercase tracking-tighter">
             <ShoppingCart size={20} className="text-orange-500" /> 
             {cuentaAbiertaId ? `MESA ${numMesa} (MODIFICANDO)` : (tipoOrden === 'comedor' ? `NUEVA MESA ${numMesa}` : `NUEVO ${tipoOrden}`)}
           </h2>
-          <button onClick={() => { setCarrito([]); setCuentaAbiertaId(null); }} className="text-slate-300 hover:text-red-500 transition-colors p-2"><Trash2 size={20} /></button>
+          <button onClick={() => { setCarrito([]); setCuentaAbiertaId(null); setMontoRecibido(""); }} className="text-slate-300 hover:text-red-500 transition-colors p-2"><Trash2 size={20} /></button>
         </div>
 
         <div className="grow overflow-y-auto p-6 space-y-4">
@@ -502,26 +552,71 @@ export default function RestaSoftPOS() {
         </div>
       </aside>
 
+      {/* --- MODAL DE PAGOS Y CAMBIO --- */}
       {mostrarModalPago && (
         <div className="fixed inset-0 bg-indigo-950/60 backdrop-blur-md flex items-center justify-center z-50 p-4 print:hidden">
-          <div className="bg-white w-full max-w-md rounded-[48px] p-10 shadow-2xl text-center animate-in zoom-in duration-200">
+          <div className="bg-white w-full max-w-lg rounded-[48px] p-10 shadow-2xl text-center animate-in zoom-in duration-200 max-h-[95vh] overflow-y-auto">
             <h2 className="text-3xl font-black text-indigo-950 uppercase italic mb-2">Procesar Orden</h2>
             <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-8">Mesa {numMesa} • {tipoOrden}</p>
             
             {usuarioActivo.rol !== 'mesero' && (
               <div className="grid grid-cols-2 gap-4 mb-6">
-                <button onClick={() => setMetodoPago('efectivo')} className={`flex flex-col items-center justify-center gap-3 p-6 rounded-3xl border-4 transition-all ${metodoPago === 'efectivo' ? 'border-emerald-500 bg-emerald-50 text-emerald-600 shadow-inner' : 'border-slate-100 text-slate-400 hover:border-slate-200'}`}><DollarSign size={32} /><span className="font-black uppercase text-xs tracking-widest">Efectivo</span></button>
+                <button onClick={() => { setMetodoPago('efectivo'); setMontoRecibido(""); }} className={`flex flex-col items-center justify-center gap-3 p-6 rounded-3xl border-4 transition-all ${metodoPago === 'efectivo' ? 'border-emerald-500 bg-emerald-50 text-emerald-600 shadow-inner' : 'border-slate-100 text-slate-400 hover:border-slate-200'}`}><DollarSign size={32} /><span className="font-black uppercase text-xs tracking-widest">Efectivo</span></button>
                 <button onClick={() => setMetodoPago('tarjeta')} className={`flex flex-col items-center justify-center gap-3 p-6 rounded-3xl border-4 transition-all ${metodoPago === 'tarjeta' ? 'border-blue-500 bg-blue-50 text-blue-600 shadow-inner' : 'border-slate-100 text-slate-400 hover:border-slate-200'}`}><CreditCard size={32} /><span className="font-black uppercase text-xs tracking-widest">Tarjeta</span></button>
               </div>
             )}
 
-            <div className="bg-slate-50 p-6 rounded-3xl mb-6 border border-slate-100">
-              <p className="text-5xl font-black italic text-indigo-950">${subtotal.toFixed(2)}</p>
+            <div className="bg-slate-50 p-6 rounded-3xl mb-6 border border-slate-100 flex justify-between items-center">
+              <span className="text-sm font-black uppercase text-slate-400">Total:</span>
+              <span className="text-4xl font-black italic text-indigo-950">${subtotal.toFixed(2)}</span>
             </div>
+
+            {/* CALCULADORA DE CAMBIO (Solo visible si es Cajero y paga en efectivo y NO es cuenta abierta) */}
+            {usuarioActivo.rol !== 'mesero' && metodoPago === 'efectivo' && !cuentaAbiertaId && (
+              <div className="mb-8 bg-white border-2 border-slate-100 p-6 rounded-3xl text-left">
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3 block">Calculadora de Cambio</label>
+                
+                {/* Botones rápidos de billetes */}
+                <div className="grid grid-cols-5 gap-2 mb-4">
+                  <button onClick={() => setMontoRecibido(subtotal.toString())} className="bg-slate-100 hover:bg-emerald-100 text-slate-600 hover:text-emerald-600 p-2 rounded-xl text-xs font-black transition-colors">Exacto</button>
+                  <button onClick={() => setMontoRecibido("50")} className="bg-slate-100 hover:bg-emerald-100 text-slate-600 hover:text-emerald-600 p-2 rounded-xl text-xs font-black transition-colors">$50</button>
+                  <button onClick={() => setMontoRecibido("100")} className="bg-slate-100 hover:bg-emerald-100 text-slate-600 hover:text-emerald-600 p-2 rounded-xl text-xs font-black transition-colors">$100</button>
+                  <button onClick={() => setMontoRecibido("200")} className="bg-slate-100 hover:bg-emerald-100 text-slate-600 hover:text-emerald-600 p-2 rounded-xl text-xs font-black transition-colors">$200</button>
+                  <button onClick={() => setMontoRecibido("500")} className="bg-slate-100 hover:bg-emerald-100 text-slate-600 hover:text-emerald-600 p-2 rounded-xl text-xs font-black transition-colors">$500</button>
+                </div>
+
+                {/* Input manual */}
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="relative grow">
+                    <DollarSign size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input 
+                      type="number" 
+                      placeholder="Monto recibido..." 
+                      className="w-full bg-slate-50 border-2 border-slate-200 rounded-2xl p-4 pl-12 font-black text-indigo-950 outline-none focus:border-emerald-500 transition-all text-lg"
+                      value={montoRecibido}
+                      onChange={(e) => setMontoRecibido(e.target.value)}
+                    />
+                  </div>
+                  <button onClick={() => setMontoRecibido("")} className="bg-red-50 text-red-500 font-black p-4 rounded-2xl hover:bg-red-100 transition-colors">C</button>
+                </div>
+
+                {/* Resultado del Cambio */}
+                <div className={`p-4 rounded-2xl flex justify-between items-center transition-all ${Number(montoRecibido) >= subtotal ? 'bg-emerald-50 border border-emerald-200' : 'bg-slate-50 border border-slate-100'}`}>
+                  <span className="text-xs font-black uppercase text-slate-500">Cambio a entregar:</span>
+                  <span className={`text-2xl font-black ${Number(montoRecibido) >= subtotal ? 'text-emerald-600' : 'text-slate-300'}`}>
+                    ${Number(montoRecibido) >= subtotal ? (Number(montoRecibido) - subtotal).toFixed(2) : "0.00"}
+                  </span>
+                </div>
+              </div>
+            )}
 
             <div className="space-y-3">
               {usuarioActivo.rol !== 'mesero' && (
-                <button onClick={() => finalizarPedido(false)} className="w-full bg-emerald-500 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-xl shadow-emerald-500/30 hover:bg-emerald-400 transition-all uppercase tracking-widest text-xs">
+                <button 
+                  onClick={() => finalizarPedido(false)} 
+                  disabled={metodoPago === 'efectivo' && (!montoRecibido || Number(montoRecibido) < subtotal)}
+                  className="w-full bg-emerald-500 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-xl shadow-emerald-500/30 hover:bg-emerald-400 transition-all uppercase tracking-widest text-xs disabled:opacity-50 disabled:bg-slate-300 disabled:shadow-none"
+                >
                   <Printer size={18} /> Cobrar e Imprimir
                 </button>
               )}
@@ -529,6 +624,34 @@ export default function RestaSoftPOS() {
                 <ClipboardList size={18} /> {cuentaAbiertaId ? 'Actualizar Orden en Cocina' : 'Enviar a Cocina y Dejar Abierta'}
               </button>
               <button onClick={() => setMostrarModalPago(false)} className="w-full bg-slate-100 text-slate-500 font-black py-4 rounded-2xl uppercase tracking-widest text-xs hover:bg-slate-200 transition-all">Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL PARA FONDO DE CAJA --- */}
+      {mostrarModalFondo && (
+        <div className="fixed inset-0 bg-indigo-950/60 backdrop-blur-md flex items-center justify-center z-50 p-4 print:hidden">
+          <div className="bg-white w-full max-w-sm rounded-[48px] p-10 shadow-2xl text-center animate-in zoom-in duration-200">
+            <div className="mx-auto bg-emerald-100 w-16 h-16 rounded-full flex items-center justify-center mb-4"><Banknote className="text-emerald-600" size={32} /></div>
+            <h2 className="text-2xl font-black text-indigo-950 uppercase italic mb-2">Fondo de Caja</h2>
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-8">Ingresa el efectivo inicial</p>
+            
+            <div className="relative mb-8">
+              <DollarSign size={24} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input 
+                type="number" 
+                placeholder="0.00" 
+                className="w-full bg-slate-50 border-2 border-slate-200 rounded-3xl p-5 pl-12 font-black text-indigo-950 outline-none focus:border-emerald-500 transition-all text-3xl text-center"
+                value={inputFondo}
+                onChange={(e) => setInputFondo(e.target.value)}
+                autoFocus
+              />
+            </div>
+            
+            <div className="flex gap-4">
+              <button onClick={() => setMostrarModalFondo(false)} className="grow bg-slate-100 text-slate-500 font-bold py-4 rounded-2xl uppercase tracking-widest text-xs hover:bg-slate-200 transition-colors">Cancelar</button>
+              <button onClick={guardarFondoCaja} className="grow bg-emerald-500 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-xs shadow-xl shadow-emerald-500/30 hover:bg-emerald-400 transition-colors flex justify-center items-center gap-2"><Check size={16}/> Guardar</button>
             </div>
           </div>
         </div>
