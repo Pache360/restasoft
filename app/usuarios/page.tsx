@@ -4,7 +4,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { 
   UserPlus, Trash2, ArrowLeft, Key, Loader2, 
-  ShieldCheck, Edit2, PlusCircle, Check, Plus,
+  ShieldCheck, Edit2, PlusCircle, Check, Plus, // <-- Añadido el Plus aquí
   Clock, Calculator, ScanFace, Camera, DollarSign, Users, X
 } from 'lucide-react';
 import Link from 'next/link';
@@ -48,7 +48,6 @@ interface ModuloPermisos {
 
 type MatrizPermisos = Record<string, ModuloPermisos>;
 
-// MOVIDO AFUERA PARA EVITAR WARNINGS DE DEPENDENCIAS EN USEEFFECT
 const permisosBase: MatrizPermisos = {
   mesero: { comandas: true, caja: false, cocina: false, inventario: false, reportes: false, admin: false },
   cajero: { comandas: true, caja: true, cocina: false, inventario: false, reportes: false, admin: false },
@@ -103,7 +102,37 @@ export default function UsuariosPage() {
     cargarModelosIA();
   }, []);
 
-  // SOLUCIÓN: FUNCIÓN ASÍNCRONA PARA EVITAR CASCADING RENDERS
+  // --- SOLUCIÓN DEL BUG DE LA CÁMARA ---
+  useEffect(() => {
+    let streamActivo: MediaStream | null = null;
+
+    if (modalRostro) {
+      setTimeout(async () => {
+        const nodoVideo = videoRef.current;
+        if (nodoVideo) {
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+              video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } 
+            });
+            nodoVideo.srcObject = stream;
+            streamActivo = stream;
+          } catch (err) { 
+            console.error("Error accediendo a la cámara:", err);
+            alert("No se pudo acceder a la cámara. Asegúrate de dar los permisos a tu navegador."); 
+          }
+        }
+      }, 200);
+    }
+
+    return () => {
+      // CORRECCIÓN: Solo limpiamos el stream guardado, evitamos usar la referencia de React
+      if (streamActivo) {
+        streamActivo.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [modalRostro]);
+  // ----------------------------------------------------------------
+
   useEffect(() => {
     const inicializarDatos = async () => {
       const userGuardado = localStorage.getItem('usuarioRestaSoft');
@@ -119,7 +148,6 @@ export default function UsuariosPage() {
       const permisosGuardados = localStorage.getItem('roles_permisos_restasoft');
       const permisosParaSetear = permisosGuardados ? JSON.parse(permisosGuardados) : permisosBase;
 
-      // Un solo batch de actualizaciones de estado
       setPermisos(permisosParaSetear);
       setUsuarioActivo(userParaSetear);
       setCargando(false);
@@ -157,7 +185,6 @@ export default function UsuariosPage() {
     setTurnos(data as Turno[] || []);
   }, []);
 
-  // SOLUCIÓN: FUNCIÓN ASÍNCRONA PARA EVITAR CASCADING RENDERS
   useEffect(() => {
     let montado = true;
     const cargarDatosCentrales = async () => {
@@ -215,25 +242,15 @@ export default function UsuariosPage() {
     localStorage.setItem('roles_permisos_restasoft', JSON.stringify(nuevosPermisos));
   };
 
-  // --- LÓGICA DE ROSTROS (IA) ---
-  const abrirRegistroRostro = async (usuario: Usuario) => {
+  // --- LÓGICA DE ROSTROS CORREGIDA ---
+  const abrirRegistroRostro = (usuario: Usuario) => {
     setUsuarioEnRostro(usuario);
-    setModalRostro(true);
-    if (videoRef.current) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        videoRef.current.srcObject = stream;
-      } catch { alert("No se pudo acceder a la cámara"); }
-    }
+    setModalRostro(true); 
   };
 
   const cerrarRegistroRostro = () => {
-    setModalRostro(false);
+    setModalRostro(false); 
     setUsuarioEnRostro(null);
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(t => t.stop());
-    }
   };
 
   const capturarYGuardarRostro = async () => {
@@ -656,7 +673,7 @@ export default function UsuariosPage() {
             <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-8">Registrando rostro de: <span className="text-orange-500">{usuarioEnRostro.nombre}</span></p>
 
             <div className="relative w-64 h-64 mx-auto bg-black rounded-full overflow-hidden border-8 border-slate-100 mb-8 shadow-inner">
-              <video ref={videoRef} autoPlay muted className="w-full h-full object-cover transform scale-x-[-1]" />
+              <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover transform scale-x-[-1]" />
               {escaneando && (
                 <div className="absolute inset-0 bg-emerald-500/20 flex items-center justify-center backdrop-blur-sm">
                   <ScanFace size={64} className="text-emerald-400 animate-pulse" />
