@@ -4,10 +4,11 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { 
   Camera, QrCode, Grid3x3, 
-  ArrowLeft, Loader2, UserCheck, LogOut, ShieldCheck, X
+  ArrowLeft, Loader2, UserCheck, LogOut, ShieldCheck, X, ScanFace
 } from 'lucide-react';
 import Link from 'next/link';
 import { Html5QrcodeScanner } from 'html5-qrcode';
+import * as faceapi from 'face-api.js';
 
 // Definición de tipos para Supabase
 interface Turno {
@@ -25,6 +26,7 @@ interface Usuario {
   qr_codigo?: string;
   turno_id?: string;
   turnos?: Turno;
+  rostro_descriptor?: number[]; // <--- El mapa matemático de la cara
 }
 
 export default function ChecadorKiosko() {
@@ -34,6 +36,10 @@ export default function ChecadorKiosko() {
   const [cargando, setCargando] = useState(false);
   const [mensaje, setMensaje] = useState({ texto: '', tipo: '' });
   
+  // Estados de IA
+  const [iaCargada, setIaCargada] = useState(false);
+  const [validandoRostro, setValidandoRostro] = useState(false);
+  
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -41,6 +47,25 @@ export default function ChecadorKiosko() {
   useEffect(() => {
     const timer = setInterval(() => setHora(new Date()), 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  // Cargar Modelos de Inteligencia Artificial al iniciar
+  useEffect(() => {
+    const cargarModelosIA = async () => {
+      try {
+        // Usamos un CDN seguro para no tener que descargar los modelos manuales
+        const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
+        await Promise.all([
+          faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+          faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+        ]);
+        setIaCargada(true);
+      } catch (error) {
+        console.error("Error cargando IA Facial", error);
+      }
+    };
+    cargarModelosIA();
   }, []);
 
   const capturarFotoBase64 = useCallback(() => {
@@ -58,11 +83,13 @@ export default function ChecadorKiosko() {
     if (!tipoRegistro) return alert("Selecciona primero ENTRADA o SALIDA");
     
     setCargando(true);
+    setValidandoRostro(metodo === 'pin'); // Activar UI de escaneo
+
     try {
       let data = null;
       let userError = null;
 
-      // 1. Identificar al usuario (TS Fix: Separar las consultas para no romper el tipado)
+      // 1. Identificar al usuario
       if (metodo === 'pin') {
         const res = await supabase.from('usuarios').select('*, turnos(*)').eq('pin', pin).single();
         data = res.data;
@@ -75,12 +102,36 @@ export default function ChecadorKiosko() {
 
       const usuario = data as unknown as Usuario;
 
-      if (userError || !usuario) throw new Error("Usuario no encontrado");
+      if (userError || !usuario) throw new Error("Usuario no encontrado o PIN incorrecto");
 
-      // 2. Capturar foto si es por PIN
+      // 2. VALIDACIÓN FACIAL CON IA (Solo si tiene rostro registrado y usa PIN)
+      if (metodo === 'pin' && usuario.rostro_descriptor && videoRef.current) {
+        if (!iaCargada) throw new Error("La IA aún está cargando, intenta en 2 segundos...");
+
+        // Escaneamos la cara de la persona parada frente a la tablet
+        const deteccion = await faceapi.detectSingleFace(videoRef.current)
+                                      .withFaceLandmarks()
+                                      .withFaceDescriptor();
+
+        if (!deteccion) {
+          throw new Error("No se detectó ningún rostro. Por favor, mira fijamente a la cámara.");
+        }
+
+        // Convertimos el descriptor guardado en la BD a un formato que la IA entienda
+        const descriptorRegistrado = new Float32Array(usuario.rostro_descriptor);
+        
+        // Calculamos la similitud (Distancia Euclidiana: Menos de 0.5 es la misma persona)
+        const distancia = faceapi.euclideanDistance(deteccion.descriptor, descriptorRegistrado);
+        
+        if (distancia > 0.50) {
+          throw new Error("ALERTA: El rostro no coincide con el de " + usuario.nombre);
+        }
+      }
+
+      // 3. Capturar foto para el historial (seguridad extra)
       const foto = metodo === 'pin' ? capturarFotoBase64() : null;
 
-      // 3. Validar puntualidad (si es entrada)
+      // 4. Validar puntualidad
       let estatus = 'puntual';
       if (tipoRegistro === 'entrada' && usuario.turnos) {
         const [h, m] = usuario.turnos.hora_entrada.split(':');
@@ -91,7 +142,7 @@ export default function ChecadorKiosko() {
         if (new Date() > limiteTolerancia) estatus = 'retardo';
       }
 
-      // 4. Guardar asistencia
+      // 5. Guardar asistencia
       const { error: asistError } = await supabase.from('asistencias').insert([{
         usuario_id: usuario.id,
         tipo_registro: tipoRegistro,
@@ -121,12 +172,15 @@ export default function ChecadorKiosko() {
       setPin("");
     } finally {
       setCargando(false);
+      setValidandoRostro(false);
     }
-  }, [pin, tipoRegistro, capturarFotoBase64]);
+  }, [pin, tipoRegistro, capturarFotoBase64, iaCargada]);
 
   // Soporte para teclado físico
   useEffect(() => {
     const manejarTeclado = (e: KeyboardEvent) => {
+      if (validandoRostro || cargando) return; // Bloquear teclado si está escaneando
+
       if (e.key >= '0' && e.key <= '9') {
         if (pin.length < 4) setPin(prev => prev + e.key);
       } else if (e.key === 'Backspace') {
@@ -140,12 +194,11 @@ export default function ChecadorKiosko() {
     };
     window.addEventListener('keydown', manejarTeclado);
     return () => window.removeEventListener('keydown', manejarTeclado);
-  }, [pin, tipoRegistro, procesarRegistro]);
+  }, [pin, tipoRegistro, procesarRegistro, validandoRostro, cargando]);
 
   // Inicializar Escáner QR
   useEffect(() => {
     let scanner: Html5QrcodeScanner | null = null;
-    
     if (tipoRegistro) {
       scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250 }, false);
       scanner.render((decodedText) => {
@@ -155,7 +208,6 @@ export default function ChecadorKiosko() {
         }
       }, () => { /* ignore error callback */ });
     }
-    
     return () => { 
       if (scanner) {
         scanner.clear().catch(console.error);
@@ -165,9 +217,7 @@ export default function ChecadorKiosko() {
 
   // Encender cámara
   useEffect(() => {
-    // ESLint Fix: Guardar la referencia en una constante local para el cleanup
     const currentVideo = videoRef.current; 
-    
     async function setupCamera() {
       if (currentVideo) {
         try {
@@ -180,7 +230,6 @@ export default function ChecadorKiosko() {
     }
     setupCamera();
     
-    // Cleanup de la cámara al desmontar
     return () => {
       if (currentVideo && currentVideo.srcObject) {
         const stream = currentVideo.srcObject as MediaStream;
@@ -198,6 +247,15 @@ export default function ChecadorKiosko() {
       <Link href="/" className="absolute top-8 left-8 p-3 bg-white/10 rounded-full hover:bg-white/20 transition-all">
         <ArrowLeft size={24} />
       </Link>
+
+      {/* Indicador de IA */}
+      <div className="absolute top-8 right-8 flex items-center gap-2">
+        {iaCargada ? (
+          <span className="bg-emerald-500/20 text-emerald-400 px-3 py-1 rounded-full text-[10px] font-black uppercase flex items-center gap-1 border border-emerald-500/30"><ScanFace size={14}/> IA Activa</span>
+        ) : (
+          <span className="bg-orange-500/20 text-orange-400 px-3 py-1 rounded-full text-[10px] font-black uppercase flex items-center gap-1 border border-orange-500/30"><Loader2 size={14} className="animate-spin"/> Cargando IA...</span>
+        )}
+      </div>
 
       <div className="text-center mb-10">
         <h1 className="text-8xl font-black italic tracking-tighter mb-2">
@@ -229,12 +287,21 @@ export default function ChecadorKiosko() {
         <div className="flex flex-col md:flex-row gap-8 w-full max-w-5xl items-center animate-in zoom-in duration-300">
           
           {/* Lado Izquierdo: Cámara/QR */}
-          <div className="w-full md:w-1/2 bg-black rounded-[48px] overflow-hidden border-4 border-white/10 shadow-2xl relative min-h-100">
+          <div className={`w-full md:w-1/2 bg-black rounded-[48px] overflow-hidden border-4 shadow-2xl relative min-h-100 transition-all ${validandoRostro ? 'border-emerald-500 ring-4 ring-emerald-500/50' : 'border-white/10'}`}>
              <div id="reader" className="w-full"></div>
-             <video ref={videoRef} autoPlay muted className="w-full h-full object-cover grayscale opacity-50 absolute inset-0 -z-10" />
-             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="border-2 border-orange-500 w-64 h-64 rounded-3xl border-dashed animate-pulse" />
-             </div>
+             <video ref={videoRef} autoPlay muted className={`w-full h-full object-cover absolute inset-0 -z-10 transition-all ${validandoRostro ? 'grayscale-0' : 'grayscale opacity-50'}`} />
+             
+             {validandoRostro ? (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-indigo-950/80 backdrop-blur-sm z-10">
+                   <ScanFace size={64} className="text-emerald-400 animate-pulse mb-4" />
+                   <p className="font-black uppercase tracking-widest text-emerald-400">Analizando Rostro...</p>
+                   <p className="text-[10px] text-white/50 mt-2 uppercase font-bold">Por favor, mira fijamente a la cámara</p>
+                </div>
+             ) : (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="border-2 border-orange-500 w-64 h-64 rounded-3xl border-dashed animate-pulse" />
+                </div>
+             )}
              <p className="absolute bottom-4 left-0 right-0 text-center text-[10px] font-black uppercase tracking-widest text-white/50">Cámara de Seguridad Activa</p>
           </div>
 
@@ -251,11 +318,11 @@ export default function ChecadorKiosko() {
 
             <div className="grid grid-cols-3 gap-3">
               {[1,2,3,4,5,6,7,8,9].map(n => (
-                <button key={n} onClick={() => { if(pin.length < 4) setPin(pin + n.toString()) }} className="bg-slate-50 border-2 border-slate-100 p-5 rounded-2xl text-2xl font-black hover:bg-orange-50 hover:border-orange-500 transition-all active:scale-95">{n}</button>
+                <button key={n} disabled={validandoRostro} onClick={() => { if(pin.length < 4) setPin(pin + n.toString()) }} className="bg-slate-50 border-2 border-slate-100 p-5 rounded-2xl text-2xl font-black hover:bg-orange-50 hover:border-orange-500 transition-all active:scale-95 disabled:opacity-50">{n}</button>
               ))}
-              <button onClick={() => setPin("")} className="bg-red-50 text-red-500 p-5 rounded-2xl font-black hover:bg-red-100">C</button>
-              <button onClick={() => { if(pin.length < 4) setPin(pin + '0') }} className="bg-slate-50 border-2 border-slate-100 p-5 rounded-2xl text-2xl font-black hover:bg-orange-50 transition-all">0</button>
-              <button onClick={() => procesarRegistro('pin')} className="bg-emerald-500 text-white p-5 rounded-2xl font-black hover:bg-emerald-400 flex items-center justify-center">
+              <button disabled={validandoRostro} onClick={() => setPin("")} className="bg-red-50 text-red-500 p-5 rounded-2xl font-black hover:bg-red-100 disabled:opacity-50">C</button>
+              <button disabled={validandoRostro} onClick={() => { if(pin.length < 4) setPin(pin + '0') }} className="bg-slate-50 border-2 border-slate-100 p-5 rounded-2xl text-2xl font-black hover:bg-orange-50 transition-all disabled:opacity-50">0</button>
+              <button disabled={validandoRostro} onClick={() => procesarRegistro('pin')} className="bg-emerald-500 text-white p-5 rounded-2xl font-black hover:bg-emerald-400 flex items-center justify-center disabled:opacity-50">
                 {cargando ? <Loader2 className="animate-spin" /> : <ShieldCheck size={32}/>}
               </button>
             </div>
@@ -267,7 +334,7 @@ export default function ChecadorKiosko() {
       <footer className="mt-12 flex gap-8 opacity-30">
         <div className="flex items-center gap-2"><Grid3x3 size={16}/> <span>PIN</span></div>
         <div className="flex items-center gap-2"><QrCode size={16}/> <span>QR</span></div>
-        <div className="flex items-center gap-2"><Camera size={16}/> <span>FOTO SEGURIDAD</span></div>
+        <div className="flex items-center gap-2"><Camera size={16}/> <span>BIOMETRÍA FACIAL</span></div>
       </footer>
     </div>
   );
