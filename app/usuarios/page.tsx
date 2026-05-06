@@ -1,12 +1,14 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { 
-  UserPlus, Trash2, ArrowLeft, Key, Loader2, UserCircle, 
-  ShieldCheck, Edit2, PlusCircle, Check
+  UserPlus, Trash2, ArrowLeft, Key, Loader2, 
+  ShieldCheck, Edit2, PlusCircle, Check, Plus,
+  Clock, Calculator, ScanFace, Camera, DollarSign, Users, X
 } from 'lucide-react';
 import Link from 'next/link';
+import * as faceapi from 'face-api.js';
 
 // --- INTERFACES ESTRICTAS PARA TYPESCRIPT ---
 interface UsuarioLogueado {
@@ -15,11 +17,24 @@ interface UsuarioLogueado {
   rol: string;
 }
 
+interface Turno {
+  id: string; 
+  nombre: string; 
+  hora_entrada: string; 
+  hora_salida: string; 
+  tolerancia_minutos: number;
+}
+
 interface Usuario {
   id: string;
   nombre: string;
   pin: string;
   rol: string; 
+  turno_id?: string; 
+  sueldo_semanal?: number; 
+  qr_codigo?: string;
+  rostro_descriptor?: number[]; 
+  turnos?: Turno;
 }
 
 interface ModuloPermisos {
@@ -44,21 +59,49 @@ const permisosBase: MatrizPermisos = {
 };
 
 export default function UsuariosPage() {
-  // ELIMINADOS LOS <any>
   const [usuarioActivo, setUsuarioActivo] = useState<UsuarioLogueado | null>(null);
   const [pinLogin, setPinLogin] = useState("");
   const [errorLogin, setErrorLogin] = useState("");
 
   const [usuarios, setUsuarios] = useState<Usuario[]>([]);
+  const [turnos, setTurnos] = useState<Turno[]>([]);
   const [cargando, setCargando] = useState(true);
-  const [vista, setVista] = useState<'staff' | 'permisos'>('staff');
+  const [vista, setVista] = useState<'staff' | 'permisos' | 'turnos' | 'nomina'>('staff');
   
   const [modalAbierto, setModalAbierto] = useState(false);
-  const [form, setForm] = useState({ id: '', nombre: '', pin: '', rol: 'mesero' });
+  const [form, setForm] = useState({ id: '', nombre: '', pin: '', rol: 'mesero', sueldo_semanal: 0, turno_id: '' });
 
   const [nuevoRolInput, setNuevoRolInput] = useState("");
-
   const [permisos, setPermisos] = useState<MatrizPermisos>(permisosBase);
+
+  // ESTADOS NUEVOS PARA HR E IA
+  const [iaCargada, setIaCargada] = useState(false);
+  const [modalRostro, setModalRostro] = useState(false);
+  const [usuarioEnRostro, setUsuarioEnRostro] = useState<Usuario | null>(null);
+  const [escaneando, setEscaneando] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  const [modalTurno, setModalTurno] = useState(false);
+  const [formTurno, setFormTurno] = useState<Partial<Turno>>({ nombre: '', hora_entrada: '08:00', hora_salida: '16:00', tolerancia_minutos: 15 });
+  const [editandoTurnoId, setEditandoTurnoId] = useState<string | null>(null);
+
+  const [horasExtraAprobadas, setHorasExtraAprobadas] = useState<Record<string, number>>({});
+
+  // Cargar Modelos de Inteligencia Artificial al montar
+  useEffect(() => {
+    const cargarModelosIA = async () => {
+      try {
+        const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
+        await Promise.all([
+          faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+          faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+        ]);
+        setIaCargada(true);
+      } catch (error) { console.error("Error cargando IA Facial", error); }
+    };
+    cargarModelosIA();
+  }, []);
 
   // SOLUCIÓN: FUNCIÓN ASÍNCRONA PARA EVITAR CASCADING RENDERS
   useEffect(() => {
@@ -105,21 +148,27 @@ export default function UsuariosPage() {
   };
 
   const fetchUsuarios = useCallback(async () => {
-    const { data } = await supabase.from('usuarios').select('*').order('rol');
+    const { data } = await supabase.from('usuarios').select('*, turnos(*)').order('rol');
     setUsuarios(data as Usuario[] || []);
+  }, []);
+
+  const fetchTurnos = useCallback(async () => {
+    const { data } = await supabase.from('turnos').select('*').order('nombre');
+    setTurnos(data as Turno[] || []);
   }, []);
 
   // SOLUCIÓN: FUNCIÓN ASÍNCRONA PARA EVITAR CASCADING RENDERS
   useEffect(() => {
     let montado = true;
-    const cargarUsuarios = async () => {
+    const cargarDatosCentrales = async () => {
       if (usuarioActivo && montado) {
         await fetchUsuarios();
+        await fetchTurnos();
       }
     };
-    cargarUsuarios();
+    cargarDatosCentrales();
     return () => { montado = false; };
-  }, [fetchUsuarios, usuarioActivo]);
+  }, [fetchUsuarios, fetchTurnos, usuarioActivo]);
 
   // --- LÓGICA DE ROLES MEJORADA ---
   const agregarNuevoRol = () => {
@@ -166,15 +215,74 @@ export default function UsuariosPage() {
     localStorage.setItem('roles_permisos_restasoft', JSON.stringify(nuevosPermisos));
   };
 
+  // --- LÓGICA DE ROSTROS (IA) ---
+  const abrirRegistroRostro = async (usuario: Usuario) => {
+    setUsuarioEnRostro(usuario);
+    setModalRostro(true);
+    if (videoRef.current) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        videoRef.current.srcObject = stream;
+      } catch { alert("No se pudo acceder a la cámara"); }
+    }
+  };
+
+  const cerrarRegistroRostro = () => {
+    setModalRostro(false);
+    setUsuarioEnRostro(null);
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach(t => t.stop());
+    }
+  };
+
+  const capturarYGuardarRostro = async () => {
+    if (!videoRef.current || !usuarioEnRostro) return;
+    setEscaneando(true);
+    try {
+      const deteccion = await faceapi.detectSingleFace(videoRef.current).withFaceLandmarks().withFaceDescriptor();
+      if (!deteccion) throw new Error("No detectó ningún rostro. Mira fijamente a la cámara con buena luz.");
+      
+      const descriptorArray = Array.from(deteccion.descriptor);
+      
+      const { error } = await supabase.from('usuarios')
+        .update({ rostro_descriptor: descriptorArray })
+        .eq('id', usuarioEnRostro.id);
+        
+      if (error) throw error;
+      
+      alert("¡Rostro registrado exitosamente para " + usuarioEnRostro.nombre + "!");
+      cerrarRegistroRostro();
+      await fetchUsuarios();
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        alert(err.message);
+      } else {
+        alert("Ocurrió un error desconocido.");
+      }
+    } finally {
+      setEscaneando(false);
+    }
+  };
+
   // --- LÓGICA DE USUARIOS ---
   const guardarUsuario = async () => {
     if (!form.nombre || form.pin.length !== 4) return alert("Nombre y PIN de 4 dígitos requeridos");
     
+    const payload = {
+      nombre: form.nombre,
+      pin: form.pin,
+      rol: form.rol,
+      sueldo_semanal: form.sueldo_semanal || 0,
+      turno_id: form.turno_id || null
+    };
+
     if (form.id) {
-      const { error } = await supabase.from('usuarios').update({ nombre: form.nombre, pin: form.pin, rol: form.rol }).eq('id', form.id);
+      const { error } = await supabase.from('usuarios').update(payload).eq('id', form.id);
       if (!error) { cerrarModal(); await fetchUsuarios(); } else { alert("Error al actualizar"); }
     } else {
-      const { error } = await supabase.from('usuarios').insert([{ nombre: form.nombre, pin: form.pin, rol: form.rol }]);
+      const qrGen = `QR-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+      const { error } = await supabase.from('usuarios').insert([{ ...payload, qr_codigo: qrGen }]);
       if (!error) { cerrarModal(); await fetchUsuarios(); } else { alert("Error: El PIN ya podría estar en uso"); }
     }
   };
@@ -187,14 +295,27 @@ export default function UsuariosPage() {
   };
 
   const abrirEditar = (u: Usuario) => {
-    setForm({ id: u.id, nombre: u.nombre, pin: u.pin, rol: u.rol });
+    setForm({ id: u.id, nombre: u.nombre, pin: u.pin, rol: u.rol, sueldo_semanal: u.sueldo_semanal || 0, turno_id: u.turno_id || '' });
     setModalAbierto(true);
   };
 
   const cerrarModal = () => {
     setModalAbierto(false);
-    setForm({ id: '', nombre: '', pin: '', rol: Object.keys(permisos)[0] });
+    setForm({ id: '', nombre: '', pin: '', rol: Object.keys(permisos)[0], sueldo_semanal: 0, turno_id: '' });
   };
+
+  // --- LÓGICA DE TURNOS ---
+  const guardarTurno = async () => {
+    if (!formTurno.nombre) return alert("Ponle un nombre al turno");
+    if (editandoTurnoId) {
+      await supabase.from('turnos').update(formTurno).eq('id', editandoTurnoId);
+    } else {
+      await supabase.from('turnos').insert([formTurno]);
+    }
+    setModalTurno(false);
+    await fetchTurnos();
+  };
+
 
   if (!usuarioActivo && !cargando) {
     return (
@@ -234,8 +355,10 @@ export default function UsuariosPage() {
             <h1 className="text-3xl font-black uppercase italic tracking-tighter">Administración</h1>
           </div>
           <div className="bg-white/10 p-1 rounded-2xl flex gap-1">
-            <button onClick={() => setVista('staff')} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${vista === 'staff' ? 'bg-orange-600' : 'text-slate-400 hover:text-white'}`}>Staff (Usuarios)</button>
-            <button onClick={() => setVista('permisos')} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${vista === 'permisos' ? 'bg-orange-600' : 'text-slate-400 hover:text-white'}`}>Roles y Permisos</button>
+            <button onClick={() => setVista('staff')} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${vista === 'staff' ? 'bg-orange-600' : 'text-slate-400 hover:text-white'}`}><Users size={14} className="inline mr-1" /> Staff</button>
+            <button onClick={() => setVista('permisos')} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${vista === 'permisos' ? 'bg-orange-600' : 'text-slate-400 hover:text-white'}`}><ShieldCheck size={14} className="inline mr-1"/> Roles</button>
+            <button onClick={() => setVista('turnos')} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${vista === 'turnos' ? 'bg-orange-600' : 'text-slate-400 hover:text-white'}`}><Clock size={14} className="inline mr-1"/> Turnos</button>
+            <button onClick={() => setVista('nomina')} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${vista === 'nomina' ? 'bg-orange-600' : 'text-slate-400 hover:text-white'}`}><Calculator size={14} className="inline mr-1"/> Nómina</button>
           </div>
         </div>
       </header>
@@ -243,7 +366,7 @@ export default function UsuariosPage() {
       <main className="max-w-6xl mx-auto p-8">
         
         {vista === 'staff' ? (
-          <div>
+          <div className="animate-in fade-in">
             <div className="flex justify-between items-center mb-6">
                <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Control de Empleados</p>
                <button onClick={() => setModalAbierto(true)} className="bg-orange-600 text-white px-6 py-3 rounded-2xl font-black flex gap-2 text-xs uppercase shadow-lg hover:bg-orange-500 transition-all"><UserPlus size={18} /> Nuevo Usuario</button>
@@ -251,18 +374,31 @@ export default function UsuariosPage() {
             
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {usuarios.map((u) => (
-                <div key={u.id} className="bg-white p-6 rounded-4xl border-2 border-slate-100 shadow-sm hover:border-orange-500 transition-all group">
-                  <div className="flex justify-between items-start mb-4">
-                    <UserCircle size={32} className="text-indigo-950/20 group-hover:text-orange-500 transition-colors" />
-                    <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${u.rol === 'admin' ? 'bg-indigo-950 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                      {u.rol}
-                    </span>
+                <div key={u.id} className="bg-white p-6 rounded-4xl border-2 border-slate-100 shadow-sm hover:border-orange-500 transition-all group flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-start mb-2">
+                      <h3 className="font-black text-xl text-indigo-950 uppercase mb-1">{u.nombre}</h3>
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${u.rol === 'admin' ? 'bg-indigo-950 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                        {u.rol}
+                      </span>
+                    </div>
+                    <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 mb-2">
+                      <Key size={12} className="text-orange-500"/> PIN: {u.pin}
+                    </p>
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-1">
+                      <Clock size={14}/> {u.turnos?.nombre || 'Sin Turno Asignado'}
+                    </p>
+                    <div className="bg-slate-50 p-3 rounded-2xl flex justify-between items-center mb-6">
+                      <span className="text-[10px] font-black text-slate-400 uppercase">Sueldo Base</span>
+                      <span className="text-lg font-black text-emerald-600">${u.sueldo_semanal || 0}/sem</span>
+                    </div>
                   </div>
-                  <h3 className="text-xl font-black text-indigo-950 uppercase mb-1">{u.nombre}</h3>
-                  <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 mb-6">
-                    <Key size={12} className="text-orange-500"/> PIN: {u.pin}
-                  </p>
+                  
                   <div className="flex gap-2">
+                    <button onClick={() => abrirRegistroRostro(u)} className={`flex flex-col items-center justify-center p-2 rounded-xl transition-all border-2 ${u.rostro_descriptor ? 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-100' : 'bg-slate-50 text-slate-400 border-slate-100 hover:border-orange-500 hover:text-orange-500'}`} title={u.rostro_descriptor ? "Actualizar Rostro" : "Registrar Rostro"}>
+                      <ScanFace size={18} className="mb-1" />
+                      <span className="text-[8px] font-black uppercase">{u.rostro_descriptor ? 'Rostro OK' : 'Capturar Cara'}</span>
+                    </button>
                     <button onClick={() => abrirEditar(u)} className="grow flex items-center justify-center gap-2 bg-slate-50 text-indigo-950 font-black py-3 rounded-xl text-[10px] uppercase tracking-widest hover:bg-slate-200 transition-all">
                       <Edit2 size={14} /> Editar
                     </button>
@@ -274,9 +410,9 @@ export default function UsuariosPage() {
               ))}
             </div>
           </div>
-        ) : (
+        ) : vista === 'permisos' ? (
 
-          <div className="bg-white p-8 rounded-4xl border-2 border-slate-100 shadow-sm overflow-x-auto">
+          <div className="bg-white p-8 rounded-4xl border-2 border-slate-100 shadow-sm overflow-x-auto animate-in fade-in">
             <div className="flex justify-between items-center mb-6">
               <div>
                 <h2 className="text-2xl font-black text-indigo-950 uppercase italic mb-1 flex items-center gap-3"><ShieldCheck className="text-orange-500"/> Matriz de Accesos</h2>
@@ -327,7 +463,6 @@ export default function UsuariosPage() {
                             onChange={() => togglePermiso(rol, mod)}
                             disabled={rol === 'admin'} 
                           />
-                          {/* SOLUCIÓN: CLASES DE TAILWIND ACTUALIZADAS A after:top-0.5 after:left-0.5 */}
                           <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 peer-disabled:opacity-50"></div>
                         </label>
                       </td>
@@ -344,9 +479,93 @@ export default function UsuariosPage() {
               </tbody>
             </table>
           </div>
-        )}
+        ) : vista === 'turnos' ? (
+
+          <div className="animate-in fade-in">
+            <div className="flex justify-between items-center mb-6">
+              <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Configuración de Horarios</p>
+              <button onClick={() => { setFormTurno({ nombre: '', hora_entrada: '08:00', hora_salida: '16:00', tolerancia_minutos: 15 }); setEditandoTurnoId(null); setModalTurno(true); }} className="bg-orange-600 text-white px-6 py-3 rounded-2xl font-black uppercase text-xs flex items-center gap-2 hover:bg-orange-500 shadow-xl"><Plus size={18}/> Nuevo Turno</button>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {turnos.map(t => (
+                <div key={t.id} className="bg-white rounded-4xl p-6 shadow-sm border-2 border-slate-100 flex justify-between items-center">
+                  <div>
+                    <h3 className="font-black text-xl text-indigo-950 uppercase mb-1">{t.nombre}</h3>
+                    <p className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><Clock size={16} className="text-orange-500"/> {t.hora_entrada} a {t.hora_salida}</p>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2">Tolerancia: {t.tolerancia_minutos} min</p>
+                  </div>
+                  <button onClick={() => { setFormTurno(t); setEditandoTurnoId(t.id); setModalTurno(true); }} className="p-4 bg-slate-50 text-slate-400 rounded-2xl hover:text-indigo-950 hover:bg-slate-100 transition-all"><Edit2 size={20}/></button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+        ) : vista === 'nomina' ? (
+
+          <div className="animate-in fade-in bg-white p-8 rounded-[48px] shadow-sm border-2 border-slate-100">
+            <div className="flex justify-between items-center mb-8 pb-8 border-b border-slate-100">
+              <div>
+                <h2 className="text-2xl font-black text-indigo-950 uppercase italic">Generador de Nómina</h2>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Aprobación de pagos y horas extra</p>
+              </div>
+              <button className="bg-emerald-500 text-white px-6 py-3 rounded-2xl font-black uppercase text-xs hover:bg-emerald-400 shadow-xl shadow-emerald-500/20">Imprimir Reporte</button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b-2 border-slate-100">
+                    <th className="pb-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Empleado</th>
+                    <th className="pb-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Sueldo Base</th>
+                    <th className="pb-4 text-[10px] font-black text-orange-500 uppercase tracking-widest">Hrs Extra Autorizadas</th>
+                    <th className="pb-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Pago Total Estimado</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {usuarios.map(u => {
+                    const hrsExtra = horasExtraAprobadas[u.id] || 0;
+                    const sueldoSemanal = u.sueldo_semanal || 0;
+                    const tarifaHora = sueldoSemanal / 48; 
+                    const pagoExtra = hrsExtra * tarifaHora;
+                    const pagoTotal = sueldoSemanal + pagoExtra;
+
+                    return (
+                      <tr key={u.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="py-6">
+                          <p className="font-black text-indigo-950 uppercase text-sm">{u.nombre}</p>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase">{u.rol}</p>
+                        </td>
+                        <td className="py-6 font-black text-slate-600">${sueldoSemanal.toFixed(2)}</td>
+                        <td className="py-6">
+                          <div className="flex items-center gap-2">
+                            <input 
+                              type="number" min="0" step="0.5" 
+                              className="w-20 bg-slate-100 border-2 border-transparent focus:border-orange-500 rounded-xl p-2 font-black text-center text-indigo-950 outline-none"
+                              value={hrsExtra === 0 ? '' : hrsExtra}
+                              placeholder="0"
+                              onChange={(e) => setHorasExtraAprobadas({...horasExtraAprobadas, [u.id]: Number(e.target.value)})}
+                            />
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">Hrs</span>
+                          </div>
+                        </td>
+                        <td className="py-6 text-right">
+                          <span className={`text-xl font-black ${hrsExtra > 0 ? 'text-emerald-600' : 'text-indigo-950'}`}>
+                            ${pagoTotal.toFixed(2)}
+                          </span>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        ) : null}
       </main>
 
+      {/* --- MODAL CREAR/EDITAR EMPLEADO --- */}
       {modalAbierto && (
         <div className="fixed inset-0 bg-indigo-950/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-md rounded-[48px] p-10 shadow-2xl">
@@ -358,18 +577,35 @@ export default function UsuariosPage() {
                 <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">Nombre del Empleado</label>
                 <input placeholder="Ej. Juan Pérez" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} />
               </div>
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">PIN de Acceso (4 Dígitos)</label>
-                <input type="text" maxLength={4} placeholder="Ej. 1234" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-black outline-none focus:border-orange-500 text-indigo-950 tracking-[0.5em]" value={form.pin} onChange={e => setForm({...form, pin: e.target.value.replace(/\D/g, '')})} />
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">PIN de Acceso</label>
+                  <input type="text" maxLength={4} placeholder="Ej. 1234" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-black outline-none focus:border-orange-500 text-indigo-950 tracking-[0.5em] text-center" value={form.pin} onChange={e => setForm({...form, pin: e.target.value.replace(/\D/g, '')})} />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">Categoría / Rol</label>
+                  <select className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950 uppercase" value={form.rol} onChange={e => setForm({...form, rol: e.target.value})}>
+                    {Object.keys(permisos).map(rolName => (
+                      <option key={rolName} value={rolName}>{rolName}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
               
               <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">Categoría / Rol</label>
-                <select className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950 uppercase" value={form.rol} onChange={e => setForm({...form, rol: e.target.value})}>
-                  {Object.keys(permisos).map(rolName => (
-                    <option key={rolName} value={rolName}>{rolName}</option>
-                  ))}
+                <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">Turno Asignado</label>
+                <select className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950 uppercase text-xs" value={form.turno_id || ''} onChange={e => setForm({...form, turno_id: e.target.value})}>
+                  <option value="">Sin Turno (Horario Libre)</option>
+                  {turnos.map(t => <option key={t.id} value={t.id}>{t.nombre} ({t.hora_entrada} - {t.hora_salida})</option>)}
                 </select>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">Sueldo Semanal Base</label>
+                <div className="relative">
+                  <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                  <input type="number" placeholder="Ej. 2500" className="w-full bg-emerald-50 border-2 border-emerald-100 rounded-2xl p-4 pl-12 font-black outline-none text-emerald-950" value={form.sueldo_semanal === 0 ? '' : form.sueldo_semanal} onChange={e => setForm({...form, sueldo_semanal: Number(e.target.value)})} />
+                </div>
               </div>
             </div>
             <div className="flex gap-4 mt-8">
@@ -379,6 +615,64 @@ export default function UsuariosPage() {
           </div>
         </div>
       )}
+
+      {/* --- MODAL CREAR/EDITAR TURNO --- */}
+      {modalTurno && (
+        <div className="fixed inset-0 bg-indigo-950/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
+          <div className="bg-white w-full max-w-sm rounded-[48px] p-10 shadow-2xl">
+            <h2 className="text-2xl font-black text-indigo-950 uppercase italic text-center mb-8">{editandoTurnoId ? 'Editar Turno' : 'Nuevo Turno'}</h2>
+            <div className="space-y-4">
+              <input placeholder="Nombre (Ej. Matutino)" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none" value={formTurno.nombre} onChange={e => setFormTurno({...formTurno, nombre: e.target.value})} />
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[9px] font-black uppercase text-slate-400 ml-2">Entrada</label>
+                  <input type="time" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none" value={formTurno.hora_entrada} onChange={e => setFormTurno({...formTurno, hora_entrada: e.target.value})} />
+                </div>
+                <div>
+                  <label className="text-[9px] font-black uppercase text-slate-400 ml-2">Salida</label>
+                  <input type="time" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none" value={formTurno.hora_salida} onChange={e => setFormTurno({...formTurno, hora_salida: e.target.value})} />
+                </div>
+              </div>
+              <div>
+                <label className="text-[9px] font-black uppercase text-slate-400 ml-2">Minutos de Tolerancia (Retardo)</label>
+                <input type="number" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none" value={formTurno.tolerancia_minutos} onChange={e => setFormTurno({...formTurno, tolerancia_minutos: Number(e.target.value)})} />
+              </div>
+            </div>
+            <div className="flex gap-4 mt-8">
+              <button onClick={() => setModalTurno(false)} className="grow bg-slate-100 text-slate-400 font-black py-4 rounded-2xl uppercase text-[10px]">Cancelar</button>
+              <button onClick={guardarTurno} className="grow bg-orange-600 text-white font-black py-4 rounded-2xl uppercase text-[10px] shadow-xl">Guardar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL REGISTRO ROSTRO IA --- */}
+      {modalRostro && usuarioEnRostro && (
+        <div className="fixed inset-0 bg-indigo-950/90 backdrop-blur-md flex items-center justify-center z-50 p-4">
+          <div className="bg-white w-full max-w-lg rounded-[48px] p-10 shadow-2xl text-center relative overflow-hidden">
+            <button onClick={cerrarRegistroRostro} className="absolute top-6 right-6 text-slate-300 hover:text-red-500 bg-slate-100 p-2 rounded-full"><X size={20}/></button>
+            
+            <h2 className="text-3xl font-black text-indigo-950 uppercase italic mb-2">Biometría</h2>
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-8">Registrando rostro de: <span className="text-orange-500">{usuarioEnRostro.nombre}</span></p>
+
+            <div className="relative w-64 h-64 mx-auto bg-black rounded-full overflow-hidden border-8 border-slate-100 mb-8 shadow-inner">
+              <video ref={videoRef} autoPlay muted className="w-full h-full object-cover transform scale-x-[-1]" />
+              {escaneando && (
+                <div className="absolute inset-0 bg-emerald-500/20 flex items-center justify-center backdrop-blur-sm">
+                  <ScanFace size={64} className="text-emerald-400 animate-pulse" />
+                </div>
+              )}
+            </div>
+
+            <p className="text-xs font-bold text-slate-500 mb-8 px-8">Pídele al empleado que mire fijamente a la cámara con buena iluminación y sin accesorios (lentes oscuros, gorras).</p>
+
+            <button disabled={escaneando || !iaCargada} onClick={capturarYGuardarRostro} className="w-full bg-emerald-500 text-white font-black py-5 rounded-2xl flex items-center justify-center gap-2 hover:bg-emerald-400 shadow-xl shadow-emerald-500/30 uppercase tracking-widest text-sm transition-all disabled:opacity-50">
+              {escaneando ? <><Loader2 className="animate-spin"/> Analizando Mapas Faciales...</> : <><Camera /> Capturar y Guardar Rostro</>}
+            </button>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
