@@ -8,7 +8,7 @@ import {
   ChefHat, Settings, Clock, ChevronRight, Flame, X, Check, Loader2,
   Printer, DollarSign, CreditCard, BarChart3, ScrollText,
   BookOpen, Package, Monitor, Users as UsersIcon, ClipboardList, Coffee, LogOut,
-  Banknote, Coins, Menu, ArrowLeft
+  Banknote, Coins, Menu, ArrowLeft, Lock
 } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -37,7 +37,10 @@ export default function RestaSoftPOS() {
   const router = useRouter(); 
 
   const [usuarioActivo, setUsuarioActivo] = useState<UsuarioLogueado | null>(null);
-  const [pinLogin, setPinLogin] = useState("");
+  
+  // NUEVOS ESTADOS PARA LOGIN
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [errorLogin, setErrorLogin] = useState("");
   
   const [productos, setProductos] = useState<Producto[]>([]);
@@ -57,10 +60,12 @@ export default function RestaSoftPOS() {
   const [metodoPago, setMetodoPago] = useState<'efectivo' | 'tarjeta'>('efectivo');
   const [montoRecibido, setMontoRecibido] = useState<string>("");
 
-  // FONDO DE CAJA PROTEGIDO (Por Rol)
+  // FONDO DE CAJA PROTEGIDO
   const [fondoCaja, setFondoCaja] = useState<number>(0);
   const [mostrarModalFondo, setMostrarModalFondo] = useState(false);
   const [inputFondo, setInputFondo] = useState<string>("");
+  const [mostrarModalMaestro, setMostrarModalMaestro] = useState(false);
+  const [pinMaestroInput, setPinMaestroInput] = useState("");
 
   const [mostrarModalCuentas, setMostrarModalCuentas] = useState(false);
   const [cuentasAbiertas, setCuentasAbiertas] = useState<CuentaAbierta[]>([]);
@@ -125,26 +130,12 @@ export default function RestaSoftPOS() {
     inicializarPOS();
   }, [router]);
 
-  useEffect(() => {
-    if (usuarioActivo) return; 
-
-    const manejarTeclado = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-
-      if (/^[0-9]$/.test(e.key)) setPinLogin(prev => prev.length < 4 ? prev + e.key : prev);
-      else if (e.key === 'Backspace') setPinLogin(prev => prev.slice(0, -1));
-      else if (e.key === 'Enter') document.getElementById('btn-login-principal')?.click();
-      else if (e.key.toLowerCase() === 'c' || e.key === 'Escape') setPinLogin("");
-    };
-
-    window.addEventListener('keydown', manejarTeclado);
-    return () => window.removeEventListener('keydown', manejarTeclado);
-  }, [usuarioActivo]);
-
-  const handleLogin = async () => {
-    if (pinLogin.length !== 4) return;
+  const handleLogin = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!username || !password) return;
     setCargando(true);
-    const { data } = await supabase.from('usuarios').select('*').eq('pin', pinLogin).single();
+
+    const { data } = await supabase.from('usuarios').select('*').eq('usuario', username).eq('password', password).single();
     
     if (data) {
       localStorage.setItem('usuarioRestaSoft', JSON.stringify(data));
@@ -153,19 +144,35 @@ export default function RestaSoftPOS() {
       const matriz = guardados ? JSON.parse(guardados) : permisosBase;
       const misPermisos = matriz[data.rol] || permisosBase.mesero;
 
-      if (data.rol === 'admin' || misPermisos.caja) { setUsuarioActivo(data); setPinLogin(""); } 
+      if (data.rol === 'admin' || misPermisos.caja) { 
+        setUsuarioActivo(data); 
+        setUsername("");
+        setPassword("");
+      } 
       else if (misPermisos.cocina) { router.push('/cocina'); } 
       else { router.push('/comandas'); }
     } else {
-      setErrorLogin("PIN Incorrecto");
+      setErrorLogin("Credenciales incorrectas");
       setTimeout(() => setErrorLogin(""), 3000);
-      setPinLogin("");
+      setPassword(""); // Solo borramos la contraseña por comodidad
     }
     setCargando(false);
   };
 
   const cerrarSesion = () => { setUsuarioActivo(null); localStorage.removeItem('usuarioRestaSoft'); };
   const ejecutarImpresion = () => { window.print(); };
+
+  const verificarPinMaestro = () => {
+    if (pinMaestroInput === "1234") {
+      setMostrarModalMaestro(false);
+      setPinMaestroInput("");
+      setInputFondo(fondoCaja > 0 ? fondoCaja.toString() : "");
+      setMostrarModalFondo(true);
+    } else {
+      alert("Código Maestro Incorrecto");
+      setPinMaestroInput("");
+    }
+  };
 
   const guardarFondoCaja = () => {
     const val = Number(inputFondo);
@@ -281,19 +288,34 @@ export default function RestaSoftPOS() {
         <h1 className="text-4xl md:text-5xl font-black italic tracking-tighter mb-8">RESTA<span className="text-orange-500 font-light text-xl md:text-2xl">SOFT</span></h1>
         <div className="bg-white p-6 md:p-10 rounded-4xl md:rounded-[48px] text-slate-900 shadow-2xl w-full max-w-sm text-center">
           <h2 className="text-xl font-bold uppercase mb-2 text-indigo-950">Acceso al Sistema</h2>
-          <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 md:mb-8">Ingresa tu PIN</p>
-          <div className="text-4xl md:text-5xl tracking-[0.5em] mb-6 md:mb-8 font-black text-indigo-950 h-12 md:h-14 bg-slate-50 rounded-2xl flex items-center justify-center border-2 border-slate-100">
-            {pinLogin.padEnd(4, '•')}
-          </div>
-          {errorLogin && <p className="text-red-500 font-bold text-sm mb-4 animate-bounce">{errorLogin}</p>}
-          <div className="grid grid-cols-3 gap-2 md:gap-3">
-            {[1,2,3,4,5,6,7,8,9].map(n => (
-              <button key={n} onClick={() => { if(pinLogin.length < 4) setPinLogin(pinLogin + n) }} className="bg-slate-50 border-2 border-slate-100 p-4 md:p-5 rounded-xl md:rounded-2xl text-xl md:text-2xl font-black text-indigo-950 hover:bg-orange-50 hover:border-orange-500 transition-all active:scale-95">{n}</button>
-            ))}
-            <button onClick={() => setPinLogin("")} className="bg-red-50 border-2 border-red-100 text-red-500 p-4 md:p-5 rounded-xl md:rounded-2xl font-black hover:bg-red-100 transition-all active:scale-95">C</button>
-            <button onClick={() => { if(pinLogin.length < 4) setPinLogin(pinLogin + '0') }} className="bg-slate-50 border-2 border-slate-100 p-4 md:p-5 rounded-xl md:rounded-2xl text-xl md:text-2xl font-black text-indigo-950 hover:bg-orange-50 hover:border-orange-500 transition-all active:scale-95">0</button>
-            <button id="btn-login-principal" onClick={handleLogin} className="bg-emerald-500 text-white p-4 md:p-5 rounded-xl md:rounded-2xl font-black hover:bg-emerald-400 shadow-lg shadow-emerald-500/30 flex items-center justify-center transition-all active:scale-95"><Check size={28}/></button>
-          </div>
+          <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 md:mb-8">Ingresa tus credenciales</p>
+          
+          <form onSubmit={handleLogin} className="flex flex-col gap-4">
+            <input 
+              type="text" 
+              placeholder="Usuario" 
+              className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950 text-center"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+            <input 
+              type="password" 
+              placeholder="Contraseña" 
+              className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950 text-center"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            
+            {errorLogin && <p className="text-red-500 font-bold text-sm animate-bounce">{errorLogin}</p>}
+
+            <button 
+              type="submit" 
+              disabled={cargando || !username || !password}
+              className="w-full mt-2 bg-emerald-500 text-white p-4 rounded-2xl font-black hover:bg-emerald-400 shadow-lg shadow-emerald-500/30 flex items-center justify-center transition-all active:scale-95 disabled:opacity-50"
+            >
+              {cargando ? <Loader2 className="animate-spin" /> : "Ingresar"}
+            </button>
+          </form>
         </div>
       </div>
     );
@@ -411,10 +433,9 @@ export default function RestaSoftPOS() {
             </div>
 
             <div className="flex items-center gap-2 md:gap-3 w-full sm:w-auto justify-between sm:justify-end">
-              {/* BOTÓN FONDO PROTEGIDO */}
               {usuarioActivo && ['admin', 'gerente'].includes(usuarioActivo.rol) && (
                 <button 
-                  onClick={() => { setInputFondo(fondoCaja > 0 ? fondoCaja.toString() : ""); setMostrarModalFondo(true); }}
+                  onClick={() => { setPinMaestroInput(""); setMostrarModalMaestro(true); }}
                   className="bg-emerald-50 text-emerald-600 hover:bg-emerald-100 px-3 py-2 rounded-xl shadow-sm border border-emerald-200 flex flex-col items-center justify-center transition-all shrink-0"
                 >
                   <span className="text-[7px] md:text-[8px] font-black uppercase tracking-widest text-emerald-500 mb-0.5">Fondo</span>
@@ -512,6 +533,27 @@ export default function RestaSoftPOS() {
           </button>
         </div>
       </aside>
+
+      {/* --- MODAL CÓDIGO MAESTRO --- */}
+      {mostrarModalMaestro && (
+        <div className="fixed inset-0 bg-indigo-950/90 backdrop-blur-md flex items-center justify-center z-70 p-4 print:hidden">
+          <div className="bg-white w-full max-w-sm rounded-4xl p-8 shadow-2xl text-center animate-in zoom-in duration-200">
+            <div className="mx-auto bg-orange-100 w-16 h-16 rounded-full flex items-center justify-center mb-4 text-orange-600"><Lock size={32} /></div>
+            <h2 className="text-xl font-black uppercase italic mb-2 text-indigo-950">Seguridad</h2>
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6">Ingresa el Código Maestro</p>
+            <div className="text-3xl tracking-[0.5em] mb-8 font-black h-14 bg-slate-50 rounded-2xl flex items-center justify-center border-2 border-slate-100 text-indigo-950">{pinMaestroInput.padEnd(4, '•')}</div>
+            <div className="grid grid-cols-3 gap-2">
+              {[1,2,3,4,5,6,7,8,9].map(n => (
+                <button key={n} onClick={() => { if(pinMaestroInput.length < 4) setPinMaestroInput(pinMaestroInput + n.toString()) }} className="bg-slate-50 border-2 border-slate-100 p-4 rounded-xl text-xl font-black text-indigo-950 hover:bg-orange-50 transition-all">{n}</button>
+              ))}
+              <button onClick={() => setPinMaestroInput("")} className="bg-red-50 text-red-500 p-4 rounded-xl font-black hover:bg-red-100 transition-colors">C</button>
+              <button onClick={() => { if(pinMaestroInput.length < 4) setPinMaestroInput(pinMaestroInput + '0') }} className="bg-slate-50 border-2 border-slate-100 p-4 rounded-xl text-xl font-black text-indigo-950 hover:bg-orange-50 transition-all">0</button>
+              <button onClick={verificarPinMaestro} className="bg-indigo-950 text-white p-4 rounded-xl flex items-center justify-center shadow-lg hover:bg-indigo-800 transition-colors"><Check size={24}/></button>
+            </div>
+            <button onClick={() => setMostrarModalMaestro(false)} className="mt-6 text-[10px] font-black uppercase text-slate-400 hover:text-red-500 transition-colors">Cerrar</button>
+          </div>
+        </div>
+      )}
 
       {/* --- MODAL PARA FONDO DE CAJA --- */}
       {mostrarModalFondo && (

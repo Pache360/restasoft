@@ -4,7 +4,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { 
   UserPlus, Trash2, ArrowLeft, Key, Loader2, 
-  ShieldCheck, Edit2, PlusCircle, Check, Plus,
+  ShieldCheck, Edit2, PlusCircle, Plus,
   Clock, Calculator, ScanFace, Camera, DollarSign, Users, X,
   ClipboardCheck, Calendar // <-- Nuevos íconos para las asistencias
 } from 'lucide-react';
@@ -14,7 +14,7 @@ import * as faceapi from 'face-api.js';
 // --- INTERFACES ---
 interface UsuarioLogueado { id: string; nombre: string; rol: string; }
 interface Turno { id: string; nombre: string; hora_entrada: string; hora_salida: string; tolerancia_minutos: number; }
-interface Usuario { id: string; nombre: string; pin: string; rol: string; turno_id?: string; sueldo_semanal?: number; qr_codigo?: string; rostro_descriptor?: number[]; turnos?: Turno; }
+interface Usuario { id: string; nombre: string; pin: string; usuario?: string; password?: string; rol: string; turno_id?: string; sueldo_semanal?: number; qr_codigo?: string; rostro_descriptor?: number[]; turnos?: Turno; }
 interface ModuloPermisos { comandas: boolean; caja: boolean; cocina: boolean; inventario: boolean; reportes: boolean; admin: boolean; }
 interface Asistencia { id: string; usuario_id: string; tipo_registro: string; metodo: string; estatus_puntualidad: string; created_at: string; }
 
@@ -31,7 +31,10 @@ const permisosBase: MatrizPermisos = {
 
 export default function UsuariosPage() {
   const [usuarioActivo, setUsuarioActivo] = useState<UsuarioLogueado | null>(null);
-  const [pinLogin, setPinLogin] = useState("");
+  
+  // LOGIN CON USUARIO Y PASSWORD
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [errorLogin, setErrorLogin] = useState("");
 
   const [usuarios, setUsuarios] = useState<Usuario[]>([]);
@@ -42,7 +45,8 @@ export default function UsuariosPage() {
   const [vista, setVista] = useState<'staff' | 'permisos' | 'turnos' | 'asistencias' | 'nomina'>('staff');
   
   const [modalAbierto, setModalAbierto] = useState(false);
-  const [form, setForm] = useState({ id: '', nombre: '', pin: '', rol: 'mesero', sueldo_semanal: 0, turno_id: '' });
+  // FORMULARIO ACTUALIZADO
+  const [form, setForm] = useState({ id: '', nombre: '', pin: '', usuario: '', password: '', rol: 'mesero', sueldo_semanal: 0, turno_id: '' });
 
   const [nuevoRolInput, setNuevoRolInput] = useState("");
   const [permisos, setPermisos] = useState<MatrizPermisos>(permisosBase);
@@ -123,22 +127,28 @@ export default function UsuariosPage() {
     inicializarDatos();
   }, []);
 
-  const handleLogin = async () => {
-    if (pinLogin.length !== 4) return;
+  // LOGIN ACTUALIZADO
+  const handleLogin = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!username || !password) return;
     setCargando(true);
-    const { data } = await supabase.from('usuarios').select('*').eq('pin', pinLogin).single();
+
+    const { data } = await supabase.from('usuarios').select('*').eq('usuario', username).eq('password', password).single();
     
     if (data && data.rol === 'admin') {
       setUsuarioActivo(data);
       localStorage.setItem('usuarioRestaSoft', JSON.stringify(data));
+      setUsername("");
+      setPassword("");
     } else if (data) {
       setErrorLogin("Acceso denegado: Solo Administradores");
+      setPassword("");
     } else {
-      setErrorLogin("PIN Incorrecto");
+      setErrorLogin("Credenciales incorrectas");
+      setPassword("");
     }
     
     setTimeout(() => setErrorLogin(""), 3000);
-    setPinLogin("");
     setCargando(false);
   };
 
@@ -239,18 +249,26 @@ export default function UsuariosPage() {
     }
   };
 
-  // --- LÓGICA DE USUARIOS ---
+  // --- LÓGICA DE USUARIOS ACTUALIZADA ---
   const guardarUsuario = async () => {
-    if (!form.nombre || form.pin.length !== 4) return alert("Nombre y PIN de 4 dígitos requeridos");
-    const payload = { nombre: form.nombre, pin: form.pin, rol: form.rol, sueldo_semanal: form.sueldo_semanal || 0, turno_id: form.turno_id || null };
+    if (!form.nombre || !form.usuario || !form.password || form.pin.length !== 4) return alert("Llena todos los campos obligatorios (Usuario, Contraseña, Nombre y PIN)");
+    const payload = { 
+      nombre: form.nombre, 
+      pin: form.pin, 
+      usuario: form.usuario, 
+      password: form.password, 
+      rol: form.rol, 
+      sueldo_semanal: form.sueldo_semanal || 0, 
+      turno_id: form.turno_id || null 
+    };
 
     if (form.id) {
       const { error } = await supabase.from('usuarios').update(payload).eq('id', form.id);
-      if (!error) { cerrarModal(); await fetchUsuarios(); } else { alert("Error al actualizar"); }
+      if (!error) { cerrarModal(); await fetchUsuarios(); } else { alert("Error al actualizar. ¿El usuario ya existe?"); }
     } else {
       const qrGen = `QR-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
       const { error } = await supabase.from('usuarios').insert([{ ...payload, qr_codigo: qrGen }]);
-      if (!error) { cerrarModal(); await fetchUsuarios(); } else { alert("Error: El PIN ya podría estar en uso"); }
+      if (!error) { cerrarModal(); await fetchUsuarios(); } else { alert("Error: El usuario o PIN ya podría estar en uso"); }
     }
   };
 
@@ -261,8 +279,8 @@ export default function UsuariosPage() {
     }
   };
 
-  const abrirEditar = (u: Usuario) => { setForm({ id: u.id, nombre: u.nombre, pin: u.pin, rol: u.rol, sueldo_semanal: u.sueldo_semanal || 0, turno_id: u.turno_id || '' }); setModalAbierto(true); };
-  const cerrarModal = () => { setModalAbierto(false); setForm({ id: '', nombre: '', pin: '', rol: Object.keys(permisos)[0], sueldo_semanal: 0, turno_id: '' }); };
+  const abrirEditar = (u: Usuario) => { setForm({ id: u.id, nombre: u.nombre, pin: u.pin, usuario: u.usuario || '', password: u.password || '', rol: u.rol, sueldo_semanal: u.sueldo_semanal || 0, turno_id: u.turno_id || '' }); setModalAbierto(true); };
+  const cerrarModal = () => { setModalAbierto(false); setForm({ id: '', nombre: '', pin: '', usuario: '', password: '', rol: Object.keys(permisos)[0], sueldo_semanal: 0, turno_id: '' }); };
 
   // --- LÓGICA DE TURNOS ---
   const guardarTurno = async () => {
@@ -280,16 +298,34 @@ export default function UsuariosPage() {
         <div className="bg-white p-10 rounded-[48px] text-slate-900 shadow-2xl w-full max-w-sm text-center">
           <h2 className="text-xl font-bold uppercase mb-2 text-indigo-950">Panel de Control</h2>
           <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-8">Acceso solo a Administradores</p>
-          <div className="text-5xl tracking-[0.5em] mb-8 font-black text-indigo-950 h-14 bg-slate-50 rounded-2xl flex items-center justify-center border-2 border-slate-100">{pinLogin.padEnd(4, '•')}</div>
-          {errorLogin && <p className="text-red-500 font-bold text-sm mb-4 animate-bounce">{errorLogin}</p>}
-          <div className="grid grid-cols-3 gap-3">
-            {[1,2,3,4,5,6,7,8,9].map(n => (
-              <button key={n} onClick={() => { if(pinLogin.length < 4) setPinLogin(pinLogin + n) }} className="bg-slate-50 border-2 border-slate-100 p-5 rounded-2xl text-2xl font-black text-indigo-950 hover:bg-orange-50 hover:border-orange-500 transition-all active:scale-95">{n}</button>
-            ))}
-            <button onClick={() => setPinLogin("")} className="bg-red-50 border-2 border-red-100 text-red-500 p-5 rounded-2xl font-black hover:bg-red-100 transition-all active:scale-95">C</button>
-            <button onClick={() => { if(pinLogin.length < 4) setPinLogin(pinLogin + '0') }} className="bg-slate-50 border-2 border-slate-100 p-5 rounded-2xl text-2xl font-black text-indigo-950 hover:bg-orange-50 hover:border-orange-500 transition-all active:scale-95">0</button>
-            <button onClick={handleLogin} className="bg-indigo-950 text-white p-5 rounded-2xl font-black hover:bg-indigo-800 shadow-lg flex items-center justify-center transition-all active:scale-95"><Check size={32}/></button>
-          </div>
+          
+          <form onSubmit={handleLogin} className="flex flex-col gap-4">
+            <input 
+              type="text" 
+              placeholder="Usuario" 
+              className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950 text-center"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+            <input 
+              type="password" 
+              placeholder="Contraseña" 
+              className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950 text-center"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            
+            {errorLogin && <p className="text-red-500 font-bold text-sm animate-bounce">{errorLogin}</p>}
+
+            <button 
+              type="submit" 
+              disabled={cargando || !username || !password}
+              className="w-full mt-2 bg-indigo-950 text-white p-4 rounded-2xl font-black hover:bg-indigo-800 shadow-lg flex items-center justify-center transition-all active:scale-95 disabled:opacity-50"
+            >
+              {cargando ? <Loader2 className="animate-spin" /> : "Ingresar"}
+            </button>
+          </form>
+
           <Link href="/" className="mt-8 block text-slate-400 text-[10px] font-black uppercase tracking-widest hover:text-indigo-950">Volver a la Caja</Link>
         </div>
       </div>
@@ -333,7 +369,8 @@ export default function UsuariosPage() {
                       <h3 className="font-black text-xl text-indigo-950 uppercase mb-1">{u.nombre}</h3>
                       <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${u.rol === 'admin' ? 'bg-indigo-950 text-white' : 'bg-slate-100 text-slate-500'}`}>{u.rol}</span>
                     </div>
-                    <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 mb-2"><Key size={12} className="text-orange-500"/> PIN: {u.pin}</p>
+                    <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 mb-1"><Users size={12} className="text-orange-500"/> Usuario: {u.usuario || 'N/A'}</p>
+                    <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 mb-2"><Key size={12} className="text-orange-500"/> PIN Checador: {u.pin}</p>
                     <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-1"><Clock size={14}/> {u.turnos?.nombre || 'Sin Turno Asignado'}</p>
                     <div className="bg-slate-50 p-3 rounded-2xl flex justify-between items-center mb-6">
                       <span className="text-[10px] font-black text-slate-400 uppercase">Sueldo Base</span>
@@ -562,8 +599,18 @@ export default function UsuariosPage() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">PIN de Acceso</label>
-                  <input type="text" maxLength={4} placeholder="Ej. 1234" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-black outline-none focus:border-orange-500 text-indigo-950 tracking-[0.5em] text-center" value={form.pin} onChange={e => setForm({...form, pin: e.target.value.replace(/\D/g, '')})} />
+                  <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">Usuario</label>
+                  <input type="text" placeholder="Ej. jperez" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950" value={form.usuario} onChange={e => setForm({...form, usuario: e.target.value})} />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">Contraseña</label>
+                  <input type="password" placeholder="***" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold outline-none focus:border-orange-500 text-indigo-950" value={form.password} onChange={e => setForm({...form, password: e.target.value})} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">PIN Checador</label>
+                  <input type="text" maxLength={4} placeholder="1234" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-black outline-none focus:border-orange-500 text-indigo-950 tracking-[0.5em] text-center" value={form.pin} onChange={e => setForm({...form, pin: e.target.value.replace(/\D/g, '')})} />
                 </div>
                 <div>
                   <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">Categoría / Rol</label>
