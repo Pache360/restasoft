@@ -57,7 +57,7 @@ export default function RestaSoftPOS() {
   const [metodoPago, setMetodoPago] = useState<'efectivo' | 'tarjeta'>('efectivo');
   const [montoRecibido, setMontoRecibido] = useState<string>("");
 
-  // FONDO DE CAJA
+  // FONDO DE CAJA PROTEGIDO (Por Rol)
   const [fondoCaja, setFondoCaja] = useState<number>(0);
   const [mostrarModalFondo, setMostrarModalFondo] = useState(false);
   const [inputFondo, setInputFondo] = useState<string>("");
@@ -227,7 +227,7 @@ export default function RestaSoftPOS() {
       alert(esCuentaAbierta ? "¡Orden actualizada en cocina!" : "¡Cobro exitoso!");
       
       setCarrito([]); setMostrarModalPago(false); setCuentaAbiertaId(null); setMontoRecibido("");
-      setMostrarCarritoMovil(false); // Cierra el carrito en móviles al pagar
+      setMostrarCarritoMovil(false); 
     } catch (err: unknown) {
       if (err instanceof Error) alert("Error al procesar: " + err.message);
     }
@@ -300,7 +300,6 @@ export default function RestaSoftPOS() {
   }
 
   return (
-    // CAMBIO A DISEÑO ADAPTABLE (Flex col en móvil, row en MD)
     <div className="flex flex-col md:flex-row min-h-screen md:h-screen bg-slate-50 text-slate-900 font-sans md:overflow-hidden print:overflow-visible print:h-auto print:block relative">
       
       {/* TICKET DE IMPRESIÓN */}
@@ -349,14 +348,12 @@ export default function RestaSoftPOS() {
         </div>
       </div>
 
-      {/* NAVEGACIÓN (Lateral en PC, Oculta en menú hamburguesa en Móvil) */}
       <nav className={`fixed md:relative top-0 left-0 h-full w-64 md:w-24 bg-indigo-950 flex flex-col md:items-center py-6 justify-between border-r border-indigo-900 print:hidden z-40 transform transition-transform duration-300 md:translate-x-0 overflow-y-auto ${mostrarMenuMovil ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="space-y-4 flex flex-col items-center w-full px-4 md:px-0">
           <div className="flex justify-between w-full md:justify-center items-center mb-4">
              <div className="bg-orange-500 p-3 rounded-2xl shadow-lg shadow-orange-500/30">
                <Flame className="text-white" size={30} />
              </div>
-             {/* Botón cerrar menú solo en móvil */}
              <button onClick={() => setMostrarMenuMovil(false)} className="md:hidden text-white/50 hover:text-white p-2"><X/></button>
           </div>
 
@@ -391,13 +388,11 @@ export default function RestaSoftPOS() {
         </div>
       </nav>
 
-      {/* OVERLAY PARA CERRAR EL MENÚ MÓVIL AL TOCAR AFUERA */}
       {mostrarMenuMovil && (
         <div onClick={() => setMostrarMenuMovil(false)} className="md:hidden fixed inset-0 bg-black/50 z-30"></div>
       )}
 
       <main className="grow p-4 md:p-6 flex flex-col md:overflow-hidden print:hidden relative pb-24 md:pb-6">
-        {/* HEADER PRINCIPAL */}
         <header className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-6">
           <div className="flex justify-between items-center w-full md:w-auto">
             <div className="flex items-center gap-3">
@@ -408,7 +403,6 @@ export default function RestaSoftPOS() {
             </div>
           </div>
           
-          {/* TIPO DE ORDEN Y BOTONES SUPERIORES */}
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4 w-full md:w-auto">
             <div className="flex gap-2 w-full sm:w-auto overflow-x-auto pb-1 shrink-0 hide-scrollbar">
               {(['comedor', 'llevar', 'domicilio'] as TipoOrden[]).map((t) => (
@@ -417,13 +411,16 @@ export default function RestaSoftPOS() {
             </div>
 
             <div className="flex items-center gap-2 md:gap-3 w-full sm:w-auto justify-between sm:justify-end">
-              <button 
-                onClick={() => { setInputFondo(fondoCaja > 0 ? fondoCaja.toString() : ""); setMostrarModalFondo(true); }}
-                className="bg-emerald-50 text-emerald-600 hover:bg-emerald-100 px-3 py-2 rounded-xl shadow-sm border border-emerald-200 flex flex-col items-center justify-center transition-all shrink-0"
-              >
-                <span className="text-[7px] md:text-[8px] font-black uppercase tracking-widest text-emerald-500 mb-0.5">Fondo</span>
-                <span className="text-xs md:text-sm font-black flex items-center gap-1"><Coins size={12}/> ${fondoCaja.toFixed(2)}</span>
-              </button>
+              {/* BOTÓN FONDO PROTEGIDO */}
+              {usuarioActivo && ['admin', 'gerente'].includes(usuarioActivo.rol) && (
+                <button 
+                  onClick={() => { setInputFondo(fondoCaja > 0 ? fondoCaja.toString() : ""); setMostrarModalFondo(true); }}
+                  className="bg-emerald-50 text-emerald-600 hover:bg-emerald-100 px-3 py-2 rounded-xl shadow-sm border border-emerald-200 flex flex-col items-center justify-center transition-all shrink-0"
+                >
+                  <span className="text-[7px] md:text-[8px] font-black uppercase tracking-widest text-emerald-500 mb-0.5">Fondo</span>
+                  <span className="text-xs md:text-sm font-black flex items-center gap-1"><Coins size={12}/> ${fondoCaja.toFixed(2)}</span>
+                </button>
+              )}
               
               <div className="flex flex-col text-right border-l border-slate-200 pl-2 md:pl-4 sm:flex">
                  <span className="text-[8px] md:text-[10px] font-black uppercase text-slate-400 tracking-widest">Usuario</span>
@@ -438,7 +435,6 @@ export default function RestaSoftPOS() {
           </div>
         </header>
 
-        {/* CATEGORÍAS (Scroll horizontal en celular) */}
         <div className="flex gap-2 md:gap-3 mb-4 md:mb-6 overflow-x-auto pb-2 shrink-0 hide-scrollbar">
           <button onClick={() => setCategoriaActiva('todas')} className={`px-4 py-2 md:px-5 md:py-3 rounded-xl md:rounded-2xl font-black text-[10px] md:text-xs uppercase flex items-center gap-2 transition-all shrink-0 ${categoriaActiva === 'todas' ? 'bg-orange-500 text-white shadow-md' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-100'}`}><ChefHat size={14} className="md:w-4 md:h-4"/> Todo</button>
           <button onClick={() => setCategoriaActiva('pizzas')} className={`px-4 py-2 md:px-5 md:py-3 rounded-xl md:rounded-2xl font-black text-[10px] md:text-xs uppercase flex items-center gap-2 transition-all shrink-0 ${categoriaActiva === 'pizzas' ? 'bg-orange-500 text-white shadow-md' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-100'}`}><Pizza size={14} className="md:w-4 md:h-4"/> Pizzas</button>
@@ -446,7 +442,6 @@ export default function RestaSoftPOS() {
           <button onClick={() => setCategoriaActiva('bebidas')} className={`px-4 py-2 md:px-5 md:py-3 rounded-xl md:rounded-2xl font-black text-[10px] md:text-xs uppercase flex items-center gap-2 transition-all shrink-0 ${categoriaActiva === 'bebidas' ? 'bg-orange-500 text-white shadow-md' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-100'}`}><Coffee size={14} className="md:w-4 md:h-4"/> Bebidas</button>
         </div>
 
-        {/* LISTA DE PRODUCTOS */}
         <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 md:gap-4 md:overflow-y-auto pr-1 md:pr-2 pb-10">
           {productos.filter(p => categoriaActiva === 'todas' || p.categoria === categoriaActiva).map((prod) => (
             <div key={prod.id} onClick={() => abrirPersonalizacion(prod)} className="bg-white p-3 md:p-5 rounded-2xl md:rounded-3xl border-2 border-slate-100 hover:border-orange-500 hover:shadow-xl transition-all cursor-pointer group flex flex-col justify-between min-h-32 md:min-h-40">
@@ -457,7 +452,6 @@ export default function RestaSoftPOS() {
         </div>
       </main>
 
-      {/* BOTÓN FLOTANTE MÓVIL PARA VER CARRITO */}
       <button 
         onClick={() => setMostrarCarritoMovil(true)} 
         className="md:hidden fixed bottom-4 left-4 right-4 bg-indigo-950 text-white p-4 rounded-2xl shadow-2xl flex justify-between items-center z-20 font-black uppercase text-xs"
@@ -469,12 +463,10 @@ export default function RestaSoftPOS() {
         <span>${subtotal.toFixed(2)} <ChevronRight size={16} className="inline"/></span>
       </button>
 
-      {/* OVERLAY PARA CERRAR EL CARRITO MÓVIL AL TOCAR AFUERA */}
       {mostrarCarritoMovil && (
         <div onClick={() => setMostrarCarritoMovil(false)} className="md:hidden fixed inset-0 bg-black/50 z-30"></div>
       )}
 
-      {/* CARRITO (Lateral en PC, Deslizable en Móvil) */}
       <aside className={`fixed inset-y-0 right-0 z-40 w-[85%] sm:w-96 bg-white md:border-l border-slate-200 flex flex-col shadow-2xl print:hidden transform transition-transform duration-300 md:relative md:translate-x-0 md:w-105 shrink-0 ${mostrarCarritoMovil ? 'translate-x-0' : 'translate-x-full'}`}>
         <div className="p-4 md:p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
           <button onClick={() => setMostrarCarritoMovil(false)} className="md:hidden text-slate-400 hover:text-slate-600 p-2"><ArrowLeft size={20}/></button>
@@ -520,6 +512,27 @@ export default function RestaSoftPOS() {
           </button>
         </div>
       </aside>
+
+      {/* --- MODAL PARA FONDO DE CAJA --- */}
+      {mostrarModalFondo && (
+        <div className="fixed inset-0 bg-indigo-950/60 backdrop-blur-md flex items-center justify-center z-60 p-4 print:hidden">
+          <div className="bg-white w-full max-w-sm rounded-4xl md:rounded-[48px] p-6 md:p-10 shadow-2xl text-center animate-in zoom-in duration-200">
+            <div className="mx-auto bg-emerald-100 w-12 h-12 md:w-16 md:h-16 rounded-full flex items-center justify-center mb-4"><Banknote className="text-emerald-600 w-6 h-6 md:w-8 md:h-8" /></div>
+            <h2 className="text-xl md:text-2xl font-black text-indigo-950 uppercase italic mb-1 md:mb-2">Fondo de Caja</h2>
+            <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 md:mb-8">Ingresa el efectivo inicial</p>
+            
+            <div className="relative mb-6 md:mb-8">
+              <DollarSign size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 md:w-6 md:h-6" />
+              <input type="number" placeholder="0.00" className="w-full bg-slate-50 border-2 border-slate-200 rounded-2xl md:rounded-3xl p-4 md:p-5 pl-10 md:pl-12 font-black text-indigo-950 outline-none focus:border-emerald-500 transition-all text-2xl md:text-3xl text-center" value={inputFondo} onChange={(e) => setInputFondo(e.target.value)} autoFocus />
+            </div>
+            
+            <div className="flex gap-3 md:gap-4">
+              <button onClick={() => setMostrarModalFondo(false)} className="grow bg-slate-100 text-slate-500 font-bold py-3 md:py-4 rounded-xl md:rounded-2xl uppercase tracking-widest text-[10px] md:text-xs hover:bg-slate-200 transition-colors">Cancelar</button>
+              <button onClick={guardarFondoCaja} className="grow bg-emerald-500 text-white font-black py-3 md:py-4 rounded-xl md:rounded-2xl uppercase tracking-widest text-[10px] md:text-xs shadow-lg hover:bg-emerald-400 transition-colors flex justify-center items-center gap-2"><Check size={14}/> Guardar</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* --- MODAL DE PAGOS Y CAMBIO --- */}
       {mostrarModalPago && (
@@ -582,27 +595,6 @@ export default function RestaSoftPOS() {
                 <ClipboardList size={16} /> {cuentaAbiertaId ? 'Actualizar Cocina' : 'Enviar a Cocina / Dejar Abierta'}
               </button>
               <button onClick={() => setMostrarModalPago(false)} className="w-full bg-slate-100 text-slate-500 font-black py-3 md:py-4 rounded-xl md:rounded-2xl uppercase tracking-widest text-[10px] md:text-xs hover:bg-slate-200 transition-all">Cancelar</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* --- MODAL PARA FONDO DE CAJA --- */}
-      {mostrarModalFondo && (
-        <div className="fixed inset-0 bg-indigo-950/60 backdrop-blur-md flex items-center justify-center z-60 p-4 print:hidden">
-          <div className="bg-white w-full max-w-sm rounded-4xl md:rounded-[48px] p-6 md:p-10 shadow-2xl text-center animate-in zoom-in duration-200">
-            <div className="mx-auto bg-emerald-100 w-12 h-12 md:w-16 md:h-16 rounded-full flex items-center justify-center mb-4"><Banknote className="text-emerald-600 w-6 h-6 md:w-8 md:h-8" /></div>
-            <h2 className="text-xl md:text-2xl font-black text-indigo-950 uppercase italic mb-1 md:mb-2">Fondo de Caja</h2>
-            <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 md:mb-8">Ingresa el efectivo inicial</p>
-            
-            <div className="relative mb-6 md:mb-8">
-              <DollarSign size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 md:w-6 md:h-6" />
-              <input type="number" placeholder="0.00" className="w-full bg-slate-50 border-2 border-slate-200 rounded-2xl md:rounded-3xl p-4 md:p-5 pl-10 md:pl-12 font-black text-indigo-950 outline-none focus:border-emerald-500 transition-all text-2xl md:text-3xl text-center" value={inputFondo} onChange={(e) => setInputFondo(e.target.value)} autoFocus />
-            </div>
-            
-            <div className="flex gap-3 md:gap-4">
-              <button onClick={() => setMostrarModalFondo(false)} className="grow bg-slate-100 text-slate-500 font-bold py-3 md:py-4 rounded-xl md:rounded-2xl uppercase tracking-widest text-[10px] md:text-xs hover:bg-slate-200 transition-colors">Cancelar</button>
-              <button onClick={guardarFondoCaja} className="grow bg-emerald-500 text-white font-black py-3 md:py-4 rounded-xl md:rounded-2xl uppercase tracking-widest text-[10px] md:text-xs shadow-lg hover:bg-emerald-400 transition-colors flex justify-center items-center gap-2"><Check size={14}/> Guardar</button>
             </div>
           </div>
         </div>
