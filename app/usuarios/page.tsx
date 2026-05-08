@@ -6,7 +6,7 @@ import {
   UserPlus, Trash2, ArrowLeft, Key, Loader2, 
   ShieldCheck, Edit2, PlusCircle, Check, Plus,
   Clock, Calculator, ScanFace, Camera, DollarSign, Users, X,
-  ClipboardCheck, Calendar, Printer
+  ClipboardCheck, Calendar, Printer, FileText
 } from 'lucide-react';
 import Link from 'next/link';
 import * as faceapi from 'face-api.js';
@@ -55,13 +55,13 @@ export default function UsuariosPage() {
   const [listaAsistencias, setListaAsistencias] = useState<Asistencia[]>([]);
 
   // NÓMINA (Semanal)
-  const [inicioSemana, setInicioSemana] = useState<number>(1); // 0=Dom, 1=Lun, 2=Mar...
+  const [inicioSemana, setInicioSemana] = useState<number>(1); 
   const [fechaInicioNomina, setFechaInicioNomina] = useState<Date>(new Date());
   const [fechaFinNomina, setFechaFinNomina] = useState<Date>(new Date());
   const [asistenciasNomina, setAsistenciasNomina] = useState<Asistencia[]>([]);
   const [horasExtraAprobadas, setHorasExtraAprobadas] = useState<Record<string, number>>({});
   
-  // Estado para impresión de recibo individual
+  // Estado para impresión de recibo TIPO TARJETÓN
   const [reciboImpresion, setReciboImpresion] = useState<{
     empleado: string; rol: string; fechaIni: string; fechaFin: string; 
     sueldoDiario: number; diasTrabajados: number; pagoBase: number; 
@@ -146,7 +146,6 @@ export default function UsuariosPage() {
   useEffect(() => {
     const hoyDate = new Date();
     const d = new Date(hoyDate);
-    // Retrocede hasta encontrar el día de la semana que coincide con "inicioSemana"
     while (d.getDay() !== inicioSemana) {
       d.setDate(d.getDate() - 1);
     }
@@ -154,7 +153,7 @@ export default function UsuariosPage() {
     const fInicio = new Date(d);
     
     const fFin = new Date(d);
-    fFin.setDate(fFin.getDate() + 6); // La semana tiene 7 días (inicio + 6)
+    fFin.setDate(fFin.getDate() + 6);
     fFin.setHours(23,59,59,999);
     
     setFechaInicioNomina(fInicio);
@@ -326,62 +325,130 @@ export default function UsuariosPage() {
     );
   }
 
-  if (cargando && !reciboImpresion) return <div className="h-screen bg-indigo-950 flex items-center justify-center text-white"><Loader2 className="animate-spin mr-2"/> <p className="font-black uppercase tracking-widest text-xs">Cargando...</p></div>;
+  if (cargando) return <div className="h-screen bg-indigo-950 flex items-center justify-center text-white"><Loader2 className="animate-spin mr-2"/> <p className="font-black uppercase tracking-widest text-xs">Cargando...</p></div>;
 
   return (
     <>
-      {/* TICKET DE NÓMINA (SOLO VISIBLE AL IMPRIMIR) */}
+      {/* --- MODAL VISTA PREVIA Y TARJETÓN DE IMPRESIÓN --- */}
+      {/* Al estar en pantalla como Modal, soluciona el problema de carga vacía */}
       {reciboImpresion && (
-        <div className="hidden print:block w-full bg-white text-black p-8 font-mono">
-          <div className="max-w-md mx-auto border-2 border-black p-8">
-            <div className="text-center mb-6">
-              <h1 className="text-2xl font-black uppercase tracking-tighter">RESTA SOFT</h1>
-              <h2 className="text-lg font-bold uppercase mt-1 border-b-2 border-black pb-2">Recibo de Nómina</h2>
-            </div>
+        <div className="fixed inset-0 z-[100] bg-slate-900/80 flex flex-col justify-start items-center overflow-y-auto print:bg-white print:p-0 p-4 md:p-8">
+          
+          {/* BOTONES DE CONTROL (Solo visibles en pantalla) */}
+          <div className="w-full max-w-3xl flex justify-between items-center mb-4 print:hidden shrink-0">
+            <button onClick={() => setReciboImpresion(null)} className="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-all">
+              <ArrowLeft size={16}/> Volver
+            </button>
+            <button onClick={() => window.print()} className="bg-emerald-500 hover:bg-emerald-400 text-white px-6 py-3 rounded-2xl font-black uppercase tracking-widest text-xs flex items-center gap-2 shadow-xl transition-all">
+              <Printer size={18}/> Imprimir Tarjetón
+            </button>
+          </div>
+
+          {/* EL TARJETÓN FORMATO IMSS */}
+          <div className="bg-white text-black max-w-3xl w-full shadow-2xl print:shadow-none print:w-full print:max-w-none font-mono text-sm shrink-0">
             
-            <div className="space-y-2 mb-6 text-sm">
-              <p><span className="font-bold">Empleado:</span> {reciboImpresion.empleado}</p>
-              <p><span className="font-bold">Puesto:</span> {reciboImpresion.rol.toUpperCase()}</p>
-              <p><span className="font-bold">Período:</span> {reciboImpresion.fechaIni} al {reciboImpresion.fechaFin}</p>
+            {/* Cabecera Tarjetón */}
+            <div className="border-2 border-black p-4 m-4 mb-2 flex justify-between items-start">
+              <div>
+                <h1 className="font-black text-2xl uppercase tracking-tighter flex items-center gap-2">
+                  <FileText size={24}/> RESTA SOFT, S.A. DE C.V.
+                </h1>
+                <p className="text-xs font-bold mt-1">R.F.C.: RSO-000000-XXX</p>
+                <p className="text-xs font-bold">REGISTRO PATRONAL: 000-00000-00</p>
+              </div>
+              <div className="text-right border-l-2 border-black pl-4">
+                <h2 className="font-black text-lg underline">RECIBO DE NÓMINA</h2>
+                <p className="text-xs font-bold mt-1 uppercase">PERÍODO DE PAGO</p>
+                <p className="text-xs">{reciboImpresion.fechaIni} AL {reciboImpresion.fechaFin}</p>
+              </div>
             </div>
 
-            <table className="w-full text-sm mb-6 text-left">
-              <thead>
-                <tr className="border-b border-black">
-                  <th className="py-2">Concepto</th>
-                  <th className="py-2 text-right">Importe</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td className="py-2">Pago Base ({reciboImpresion.diasTrabajados} días x ${reciboImpresion.sueldoDiario.toFixed(2)})</td>
-                  <td className="py-2 text-right">${reciboImpresion.pagoBase.toFixed(2)}</td>
-                </tr>
-                {reciboImpresion.horasExtra > 0 && (
-                  <tr>
-                    <td className="py-2">Horas Extra ({reciboImpresion.horasExtra} hrs)</td>
-                    <td className="py-2 text-right">${reciboImpresion.pagoExtra.toFixed(2)}</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-
-            <div className="border-t-2 border-black pt-2 flex justify-between items-center mb-12">
-              <span className="font-bold text-lg">TOTAL A PAGAR:</span>
-              <span className="font-black text-xl">${reciboImpresion.total.toFixed(2)}</span>
+            {/* Datos del Empleado */}
+            <div className="border-2 border-black border-t-0 p-4 m-4 mt-0 grid grid-cols-2 md:grid-cols-3 gap-y-3 gap-x-4 text-xs">
+              <div className="col-span-2 md:col-span-2"><span className="font-bold block text-[10px] text-gray-500">TRABAJADOR:</span> <span className="uppercase text-sm font-black">{reciboImpresion.empleado}</span></div>
+              <div><span className="font-bold block text-[10px] text-gray-500">PUESTO:</span> <span className="uppercase font-bold">{reciboImpresion.rol}</span></div>
+              <div><span className="font-bold block text-[10px] text-gray-500">DÍAS LABORADOS:</span> <span className="font-bold">{reciboImpresion.diasTrabajados} DÍAS</span></div>
+              <div><span className="font-bold block text-[10px] text-gray-500">SUELDO DIARIO:</span> <span className="font-bold">${reciboImpresion.sueldoDiario.toFixed(2)}</span></div>
+              <div><span className="font-bold block text-[10px] text-gray-500">N.S.S.:</span> ________________</div>
+              <div><span className="font-bold block text-[10px] text-gray-500">C.U.R.P.:</span> ________________</div>
+              <div className="col-span-2 md:col-span-1"><span className="font-bold block text-[10px] text-gray-500">R.F.C. EMPLEADO:</span> ________________</div>
             </div>
 
-            <div className="mt-16 text-center">
-              <div className="border-t border-black w-64 mx-auto mb-2"></div>
-              <p className="text-xs uppercase">Firma de Conformidad</p>
-              <p className="text-[10px] mt-1 text-gray-500">Al firmar este recibo acepto el pago total de mis servicios.</p>
+            {/* Tabla de Percepciones y Deducciones */}
+            <div className="flex flex-col md:flex-row border-2 border-black m-4 mb-2 text-xs h-auto md:h-64">
+              
+              {/* Columna Percepciones */}
+              <div className="w-full md:w-1/2 border-b-2 md:border-b-0 md:border-r-2 border-black flex flex-col">
+                <div className="bg-slate-200 p-2 font-black text-center border-b-2 border-black tracking-widest">PERCEPCIONES</div>
+                <div className="p-4 space-y-3 grow">
+                  <div className="flex justify-between items-end border-b border-dashed border-slate-300 pb-1">
+                    <span>Sueldo Base ({reciboImpresion.diasTrabajados} días)</span>
+                    <span className="font-bold">${reciboImpresion.pagoBase.toFixed(2)}</span>
+                  </div>
+                  {reciboImpresion.horasExtra > 0 && (
+                    <div className="flex justify-between items-end border-b border-dashed border-slate-300 pb-1">
+                      <span>Horas Extra ({reciboImpresion.horasExtra} hrs)</span>
+                      <span className="font-bold">${reciboImpresion.pagoExtra.toFixed(2)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between items-end border-b border-dashed border-slate-300 pb-1 text-slate-400">
+                    <span>Propinas / Bonos</span>
+                    <span>$0.00</span>
+                  </div>
+                </div>
+                <div className="border-t-2 border-black p-2 bg-slate-100 flex justify-between font-black">
+                  <span>SUMA PERCEPCIONES:</span>
+                  <span>${reciboImpresion.total.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Columna Deducciones */}
+              <div className="w-full md:w-1/2 flex flex-col">
+                <div className="bg-slate-200 p-2 font-black text-center border-b-2 border-black tracking-widest">DEDUCCIONES</div>
+                <div className="p-4 space-y-3 grow">
+                  <div className="flex justify-between items-end border-b border-dashed border-slate-300 pb-1 text-slate-400">
+                    <span>Retención I.M.S.S.</span>
+                    <span>$0.00</span>
+                  </div>
+                  <div className="flex justify-between items-end border-b border-dashed border-slate-300 pb-1 text-slate-400">
+                    <span>Retención I.S.R.</span>
+                    <span>$0.00</span>
+                  </div>
+                  <div className="flex justify-between items-end border-b border-dashed border-slate-300 pb-1 text-slate-400">
+                    <span>Faltas / Retardos</span>
+                    <span>$0.00</span>
+                  </div>
+                </div>
+                <div className="border-t-2 border-black p-2 bg-slate-100 flex justify-between font-black">
+                  <span>SUMA DEDUCCIONES:</span>
+                  <span>$0.00</span>
+                </div>
+              </div>
+
             </div>
+
+            {/* Total Neto a Pagar */}
+            <div className="border-2 border-black p-4 m-4 mt-0 flex justify-between items-center bg-slate-100">
+              <span className="font-black tracking-widest">NETO A PAGAR:</span>
+              <span className="font-black text-2xl">${reciboImpresion.total.toFixed(2)} <span className="text-xs">MXN</span></span>
+            </div>
+
+            {/* Firmas */}
+            <div className="p-8 pb-12 text-center text-xs mt-8">
+              <p className="mb-16 font-bold leading-relaxed max-w-xl mx-auto text-justify">
+                RECIBÍ DE LA EMPRESA ARRIBA MENCIONADA, LA CANTIDAD NETA DESCRITA EN ESTE RECIBO, ESTANDO CONFORME CON LAS PERCEPCIONES Y DEDUCCIONES RETENIDAS, DECLARANDO QUE NO SE ME ADEUDA CANTIDAD ALGUNA POR NINGÚN CONCEPTO, NO RESERVÁNDOME ACCIÓN NI DERECHO ALGUNO QUE EJERCITAR EN CONTRA DE LA MISMA.
+              </p>
+              <div className="w-64 border-t-2 border-black mx-auto pt-2 font-black tracking-widest uppercase">
+                FIRMA DEL TRABAJADOR
+              </div>
+            </div>
+
           </div>
         </div>
       )}
 
-      {/* APLICACIÓN PRINCIPAL (OCULTA AL IMPRIMIR) */}
-      <div className="min-h-screen bg-slate-50 font-sans pb-20 print:hidden">
+      {/* APLICACIÓN PRINCIPAL (OCULTA AL IMPRIMIR O VER RECIBO) */}
+      <div className={`min-h-screen bg-slate-50 font-sans pb-20 print:hidden ${reciboImpresion ? 'hidden' : 'block'}`}>
         <header className="bg-indigo-950 text-white p-8 shadow-xl">
           <div className="max-w-6xl mx-auto flex justify-between items-center overflow-x-auto hide-scrollbar">
             <div className="flex items-center gap-4 shrink-0 mr-8">
@@ -566,7 +633,7 @@ export default function UsuariosPage() {
               </div>
 
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
+                <table className="w-full text-left border-collapse min-w-[800px]">
                   <thead>
                     <tr className="border-b-2 border-slate-100">
                       <th className="pb-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Empleado</th>
@@ -633,20 +700,17 @@ export default function UsuariosPage() {
                             <button 
                               disabled={pagoTotal === 0}
                               onClick={() => {
+                                // Al darle clic, abre el modal de vista previa
                                 setReciboImpresion({
                                   empleado: u.nombre, rol: u.rol, fechaIni: strFechaIni, fechaFin: strFechaFin,
                                   sueldoDiario: sueldoDiario, diasTrabajados: diasUnicosTrabajados, pagoBase: pagoBaseCalculado,
                                   horasExtra: hrsExtra, pagoExtra: pagoExtra, total: pagoTotal
                                 });
-                                // Retraso obligatorio para que React dibuje el recibo invisible en el DOM antes de imprimir
-                                setTimeout(() => {
-                                  window.print();
-                                }, 500); 
                               }}
                               className="bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white p-3 rounded-xl transition-colors inline-flex disabled:opacity-50 disabled:hover:bg-indigo-50 disabled:hover:text-indigo-600"
-                              title="Imprimir Recibo de Empleado"
+                              title="Ver Tarjetón de Recibo"
                             >
-                              <Printer size={18} />
+                              <FileText size={18} />
                             </button>
                           </td>
                         </tr>
